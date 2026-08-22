@@ -1,0 +1,23 @@
+{
+  "_meta": {
+    "descripcion": "Valores finales (VF) de letras y bonos capitalizables (LECAP/BONCAP). El VF es fijo: se define en la licitación de emisión (capital + interés capitalizado al vencimiento, por 100 VN). TIR = (VF/P)^(365/dias)-1.",
+    "fuente": "Derivado de bonistas.com 2026-07-07 (VF = precio × dolar_equilibrio / dolar_spot, invariante de emisión). VERIFICAR contra Secretaría de Finanzas antes de operar.",
+    "convencion": "valor_final por 100 VN. El vencimiento sale del feed BYMA (maturityDate).",
+    "actualizado": "2026-07-08"
+  },
+  "capitalizables": {
+    "S17L6": {"valor_final": 107.91, "tipo": "LECAP"},
+    "S31L6": {"valor_final": 117.70, "tipo": "LECAP"},
+    "S14G6": {"valor_final": 108.14, "tipo": "LECAP"},
+    "S31G6": {"valor_final": 127.04, "tipo": "LECAP"},
+    "S30S6": {"valor_final": 117.55, "tipo": "LECAP"},
+    "S30O6": {"valor_final": 135.25, "tipo": "LECAP"},
+    "S30N6": {"valor_final": 129.92, "tipo": "LECAP"},
+    "S15S6": {"valor_final": 107.19, "tipo": "BONCAP"},
+    "S13N6": {"valor_final": 109.64, "tipo": "BONCAP"},
+    "T15E7": {"valor_final": 161.08, "tipo": "BONCAP"},
+    "T30A7": {"valor_final": 157.35, "tipo": "BONCAP"},
+    "T31Y7": {"valor_final": 151.58, "tipo": "BONCAP"},
+    "T30J7": {"valor_final": 155.98, "tipo": "BONCAP"}
+  }
+}

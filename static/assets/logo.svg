@@ -1,0 +1,10 @@
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Two interlocking pieces forming a C that "calzan" (fit together) -->
+  <!-- Upper piece -->
+  <path d="M20 5 A15 15 0 0 0 5 20 L12 20 A8 8 0 0 1 20 12 Z" fill="#2DD4BF"/>
+  <!-- Lower piece that fits -->
+  <path d="M5 20 A15 15 0 0 0 20 35 L20 28 A8 8 0 0 1 12 20 Z" fill="#2563EB"/>
+  <!-- The notch/fit indicator - a small bar showing the "calce" (fit) -->
+  <rect x="22" y="17.5" width="13" height="5" rx="2.5" fill="#2563EB"/>
+  <rect x="22" y="24" width="9" height="5" rx="2.5" fill="#2DD4BF" opacity="0.7"/>
+</svg>

@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0B1F3A">
+  <title>Calce — Tesorería PyME</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css?v=1">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" width="30" height="30" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M30 9 A14 14 0 0 0 20 5 A14 14 0 0 0 6 19 L13 19 A7 7 0 0 1 20 12 A7 7 0 0 1 25 14 Z" fill="#2DD4BF"/>
+        <path d="M30 31 A14 14 0 0 1 20 35 A14 14 0 0 1 6 21 L13 21 A7 7 0 0 0 20 28 A7 7 0 0 0 25 26 Z" fill="#4C8DFF"/>
+      </svg>
+      <span class="brand-name">Calce</span>
+    </div>
+    <nav class="topnav">
+      <button class="nav-item active" data-view="flujo">Flujo de caja</button>
+      <button class="nav-item" data-view="excedente">Excedente</button>
+      <button class="nav-item" data-view="inversiones">Inversiones</button>
+      <button class="nav-item" data-view="fci">FCI</button>
+      <button class="nav-item" data-view="mercado">Mercado de bonos</button>
+      <button class="nav-item" data-view="impuestos">Impuestos</button>
+      <button class="nav-item" data-view="conciliacion">Conciliación</button>
+    </nav>
+  </header>
+
+  <main class="main" id="main">
+    <!-- Vista Flujo de caja -->
+    <section class="view" id="view-flujo">
+
+      <div class="board">
+        <!-- Panel de control izquierdo -->
+        <aside class="controls">
+          <div class="ctrl-card">
+            <h2>Punto de partida</h2>
+            <label class="field">
+              <span>Saldo inicial de caja</span>
+              <div class="money-input">
+                <em>$</em>
+                <input type="number" id="opening" value="800000" step="1000">
+              </div>
+            </label>
+            <label class="field">
+              <span>Colchón mínimo</span>
+              <div class="money-input">
+                <em>$</em>
+                <input type="number" id="buffer" value="200000" step="1000">
+              </div>
+              <small>La plata que no querés tocar nunca.</small>
+            </label>
+            <label class="field">
+              <span>Horizonte</span>
+              <select id="horizon">
+                <option value="30">30 días</option>
+                <option value="60">60 días</option>
+                <option value="90" selected>90 días</option>
+                <option value="180">6 meses</option>
+                <option value="365">1 año</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="ctrl-card">
+            <div class="ctrl-head">
+              <h2>Movimientos</h2>
+              <div class="ctrl-actions">
+                <button class="add-btn ghost" id="import-mov">↑ Importar</button>
+                <button class="add-btn" id="add-mov">+ Agregar</button>
+              </div>
+            </div>
+            <input type="file" id="import-file" accept=".xlsx,.xls,.csv" style="display:none">
+            <div class="mov-list" id="mov-list"></div>
+          </div>
+        </aside>
+
+        <!-- Resultado principal -->
+        <div class="result">
+          <div class="kpi-row" id="kpi-row"></div>
+          <div class="chart-card">
+            <div class="chart-head">
+              <h2>Saldo proyectado</h2>
+              <div class="chart-legend">
+                <span class="lg lg-balance">Saldo</span>
+                <span class="lg lg-buffer">Colchón</span>
+                <span class="lg lg-surplus">Excedente</span>
+              </div>
+            </div>
+            <div id="chart"></div>
+          </div>
+          <div class="table-card">
+            <div class="chart-head">
+              <h2>Detalle por fecha</h2>
+              <div class="chart-tools">
+                <div class="view-toggle">
+                  <button class="vt-btn active" data-cfgrain="dia">Por día</button>
+                  <button class="vt-btn" data-cfgrain="semana">Por semana</button>
+                </div>
+                <button class="cf-link" id="cf-export">↓ CSV</button>
+              </div>
+            </div>
+            <div id="cf-table"></div>
+          </div>
+          <div class="insights" id="insights"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Vista Excedente -->
+    <section class="view hidden" id="view-excedente">
+      <div class="excedente-wrap" id="excedente-wrap"></div>
+    </section>
+
+    <!-- Vista Inversiones -->
+    <section class="view hidden" id="view-inversiones">
+      <div class="inv-wrap" id="inv-wrap"></div>
+    </section>
+
+    <!-- Vista Mercado de bonos (tableros con métricas y curvas) -->
+    <section class="view hidden" id="view-mercado">
+      <div class="mkt-wrap" id="mkt-wrap"></div>
+    </section>
+
+    <!-- Vista FCI con filtros -->
+    <section class="view hidden" id="view-fci">
+      <div class="fci-wrap" id="fci-wrap"></div>
+    </section>
+
+    <!-- Vista Impuestos -->
+    <section class="view hidden" id="view-impuestos">
+      <div class="imp-wrap" id="imp-wrap"></div>
+    </section>
+
+    <!-- Vista Conciliación bancaria -->
+    <section class="view hidden" id="view-conciliacion">
+      <div class="conc-wrap" id="conc-wrap"></div>
+    </section>
+  </main>
+
+  <!-- Template de fila de movimiento -->
+  <template id="mov-template">
+    <div class="mov-row">
+      <input class="mov-label" type="text" placeholder="Concepto">
+      <div class="mov-amount">
+        <select class="mov-sign">
+          <option value="1">Entra</option>
+          <option value="-1">Sale</option>
+        </select>
+        <input class="mov-value" type="number" placeholder="0" step="1000">
+      </div>
+      <input class="mov-date" type="date">
+      <div class="mov-meta">
+        <select class="mov-rec">
+          <option value="none">Una vez</option>
+          <option value="weekly">Semanal</option>
+          <option value="monthly">Mensual</option>
+        </select>
+        <select class="mov-medio">
+          <option value="transferencia">Transferencia</option>
+          <option value="efectivo">Efectivo</option>
+          <option value="cheque">Cheque</option>
+          <option value="tarjeta">Tarjeta</option>
+        </select>
+      </div>
+      <button class="mov-del" title="Eliminar">×</button>
+    </div>
+  </template>
+
+  <script src="/static/app.js?v=1"></script>
+</body>
+</html>

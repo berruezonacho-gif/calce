@@ -1,0 +1,178 @@
+{
+  "_meta": {
+    "descripcion": "Condiciones de emisión de ONs argentinas líquidas. Los flujos son fijos (vienen del prospecto de emisión BYMA/CNV). El precio se toma en vivo de BYMA. Actualizar cuando salga una nueva emisión relevante.",
+    "convencion": "coupon_rate en decimal anual (0.095 = 9,5%). frequency = cupones/año. amort_start = fecha primer pago de capital (null = bullet). amort_count = cantidad de cuotas de capital.",
+    "fuentes": "Prospectos BYMA data-widgets, IOL, bonistas.com",
+    "actualizado": "2026-07"
+  },
+  "ons": {
+    "YMCXO": {
+      "issuer": "YPF S.A.",
+      "name": "YPF ON Clase XVI",
+      "currency": "USD",
+      "coupon_rate": 0.09,
+      "frequency": 2,
+      "maturity": "2029-02-12",
+      "amort_start": null,
+      "amort_count": 1,
+      "law": "NY",
+      "isin": "US984245AL05"
+    },
+    "YMCIO": {
+      "issuer": "YPF S.A.",
+      "name": "YPF ON 8.75% 2031",
+      "currency": "USD",
+      "coupon_rate": 0.0875,
+      "frequency": 2,
+      "maturity": "2031-06-04",
+      "amort_start": null,
+      "amort_count": 1,
+      "law": "NY",
+      "isin": "US984245AM87"
+    },
+    "YCA6O": {
+      "issuer": "YPF S.A.",
+      "name": "YPF ON 8.5% 2025",
+      "currency": "USD",
+      "coupon_rate": 0.085,
+      "frequency": 2,
+      "maturity": "2025-07-28",
+      "amort_start": null,
+      "amort_count": 1,
+      "law": "AR",
+      "isin": "ARYPFS560099"
+    },
+    "MRCAO": {
+      "issuer": "Mastellone Hermanos S.A.",
+      "name": "Mastellone ON 2026",
+      "currency": "USD",
+      "coupon_rate": 0.105,
+      "frequency": 2,
+      "maturity": "2026-07-03",
+      "amort_start": null,
+      "amort_count": 1,
+      "law": "NY"
+    },
+    "IRCFO": {
+      "issuer": "IRSA S.A.",
+      "name": "IRSA ON 8.75% 2028",
+      "currency": "USD",
+      "coupon_rate": 0.0875,
+      "frequency": 2,
+      "maturity": "2028-03-23",
+      "amort_start": "2024-03-23",
+      "amort_count": 5,
+      "law": "NY"
+    },
+    "CAC2O": {
+      "issuer": "Capex S.A.",
+      "name": "Capex ON 6.875% 2024",
+      "currency": "USD",
+      "coupon_rate": 0.06875,
+      "frequency": 2,
+      "maturity": "2024-05-15",
+      "amort_start": null,
+      "amort_count": 1,
+      "law": "NY"
+    },
+    "TLC5O": {
+      "issuer": "Telecom Argentina S.A.",
+      "name": "Telecom ON 8.5% 2025",
+      "currency": "USD",
+      "coupon_rate": 0.085,
+      "frequency": 2,
+      "maturity": "2025-08-01",
+      "amort_start": "2023-08-01",
+      "amort_count": 4,
+      "law": "NY"
+    },
+    "PNDCO": {
+      "issuer": "Pan American Energy",
+      "name": "PAE Clase 12 9.125% 2027",
+      "currency": "USD",
+      "coupon_rate": 0.09125,
+      "frequency": 2,
+      "maturity": "2027-04-30",
+      "amort_start": "2025-04-30",
+      "amort_count": 5,
+      "law": "NY"
+    },
+    "CSDNO": {
+      "issuer": "Cresud S.A.",
+      "name": "Cresud ON 2028",
+      "currency": "USD",
+      "coupon_rate": 0.075,
+      "frequency": 2,
+      "maturity": "2028-02-16",
+      "amort_start": null,
+      "amort_count": 1,
+      "law": "NY"
+    },
+    "GN34O": {
+      "issuer": "Genneia S.A.",
+      "name": "Genneia ON 8.75% 2034",
+      "currency": "USD",
+      "coupon_rate": 0.0875,
+      "frequency": 2,
+      "maturity": "2034-01-20",
+      "amort_start": "2027-01-20",
+      "amort_count": 8,
+      "law": "NY"
+    },
+    "PECFO": {
+      "issuer": "Pampa Energía S.A.",
+      "name": "Pampa ON 9.125% 2029",
+      "currency": "USD",
+      "coupon_rate": 0.09125,
+      "frequency": 2,
+      "maturity": "2029-04-15",
+      "amort_start": null,
+      "amort_count": 1,
+      "law": "NY"
+    },
+    "MGCHO": {
+      "issuer": "Central Puerto S.A.",
+      "name": "Central Puerto ON 2026",
+      "currency": "USD",
+      "coupon_rate": 0.0625,
+      "frequency": 2,
+      "maturity": "2026-11-02",
+      "amort_start": null,
+      "amort_count": 1,
+      "law": "NY"
+    },
+    "LOC2O": {
+      "issuer": "Loma Negra S.A.",
+      "name": "Loma Negra ON 2026",
+      "currency": "USD",
+      "coupon_rate": 0.075,
+      "frequency": 2,
+      "maturity": "2026-04-30",
+      "amort_start": null,
+      "amort_count": 1,
+      "law": "AR"
+    },
+    "TSC1O": {
+      "issuer": "Transportadora Gas del Sur",
+      "name": "TGS ON 6.75% 2025",
+      "currency": "USD",
+      "coupon_rate": 0.0675,
+      "frequency": 2,
+      "maturity": "2025-05-02",
+      "amort_start": null,
+      "amort_count": 1,
+      "law": "NY"
+    },
+    "CP17O": {
+      "issuer": "Compañía General de Combustibles",
+      "name": "CGC ON 2025",
+      "currency": "USD",
+      "coupon_rate": 0.0975,
+      "frequency": 2,
+      "maturity": "2025-11-07",
+      "amort_start": null,
+      "amort_count": 1,
+      "law": "NY"
+    }
+  }
+}
