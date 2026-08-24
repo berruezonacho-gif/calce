@@ -21,10 +21,15 @@
     </div>
     <nav class="topnav">
       <button class="nav-item active" data-view="flujo">Flujo de caja</button>
-      <button class="nav-item" data-view="excedente">Excedente</button>
-      <button class="nav-item" data-view="inversiones">Inversiones</button>
-      <button class="nav-item" data-view="fci">FCI</button>
-      <button class="nav-item" data-view="mercado">Mercado de bonos</button>
+      <div class="nav-dropdown">
+        <button class="nav-item nav-drop-btn" data-group="inversiones">Inversiones <span class="caret">▾</span></button>
+        <div class="nav-menu">
+          <button class="nav-sub" data-view="inversiones">Simulador</button>
+          <button class="nav-sub" data-view="excedente">Excedente</button>
+          <button class="nav-sub" data-view="fci">FCI</button>
+          <button class="nav-sub" data-view="mercado">Bonos</button>
+        </div>
+      </div>
       <button class="nav-item" data-view="impuestos">Impuestos</button>
       <button class="nav-item" data-view="conciliacion">Conciliación</button>
     </nav>
@@ -38,15 +43,13 @@
         <!-- Panel de control izquierdo -->
         <aside class="controls">
           <div class="ctrl-card">
-            <h2>Punto de partida</h2>
-            <label class="field">
-              <span>Saldo inicial de caja</span>
-              <div class="money-input">
-                <em>$</em>
-                <input type="number" id="opening" value="800000" step="1000">
-              </div>
-            </label>
-            <label class="field">
+            <div class="ctrl-head">
+              <h2>Cuentas</h2>
+              <button class="add-btn" id="add-account">+ Cuenta</button>
+            </div>
+            <div class="accounts-list" id="accounts-list"></div>
+            <div class="accounts-total" id="accounts-total"></div>
+            <label class="field" style="margin-top:14px">
               <span>Colchón mínimo</span>
               <div class="money-input">
                 <em>$</em>
@@ -75,13 +78,30 @@
               </div>
             </div>
             <input type="file" id="import-file" accept=".xlsx,.xls,.csv" style="display:none">
-            <div class="mov-list" id="mov-list"></div>
+            <div class="mov-summary" id="mov-summary"></div>
           </div>
         </aside>
 
         <!-- Resultado principal -->
         <div class="result">
           <div class="kpi-row" id="kpi-row"></div>
+          <div class="account-balances" id="account-balances"></div>
+          <div class="table-card">
+            <div class="chart-head">
+              <h2>Detalle por fecha</h2>
+              <div class="chart-tools">
+                <select id="cf-account-filter" class="cf-account-filter">
+                  <option value="">Todas las cuentas</option>
+                </select>
+                <div class="view-toggle">
+                  <button class="vt-btn active" data-cfgrain="dia">Por día</button>
+                  <button class="vt-btn" data-cfgrain="semana">Por semana</button>
+                </div>
+                <button class="cf-link" id="cf-export">↓ CSV</button>
+              </div>
+            </div>
+            <div id="cf-table"></div>
+          </div>
           <div class="chart-card">
             <div class="chart-head">
               <h2>Saldo proyectado</h2>
@@ -92,19 +112,6 @@
               </div>
             </div>
             <div id="chart"></div>
-          </div>
-          <div class="table-card">
-            <div class="chart-head">
-              <h2>Detalle por fecha</h2>
-              <div class="chart-tools">
-                <div class="view-toggle">
-                  <button class="vt-btn active" data-cfgrain="dia">Por día</button>
-                  <button class="vt-btn" data-cfgrain="semana">Por semana</button>
-                </div>
-                <button class="cf-link" id="cf-export">↓ CSV</button>
-              </div>
-            </div>
-            <div id="cf-table"></div>
           </div>
           <div class="insights" id="insights"></div>
         </div>
@@ -170,6 +177,59 @@
       <button class="mov-del" title="Eliminar">×</button>
     </div>
   </template>
+
+  <!-- Modal para agregar/editar movimiento -->
+  <div class="modal-overlay hidden" id="mov-modal">
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="mov-modal-title">Nuevo movimiento</h2>
+        <button class="modal-close" id="mov-modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="field"><span>Concepto</span>
+          <input type="text" id="m-label" placeholder="Ej: Cobranza cliente">
+        </label>
+        <div class="modal-row">
+          <label class="field"><span>Tipo</span>
+            <select id="m-sign">
+              <option value="1">Entra (ingreso)</option>
+              <option value="-1">Sale (gasto)</option>
+            </select>
+          </label>
+          <label class="field"><span>Monto</span>
+            <div class="money-input"><em>$</em><input type="number" id="m-value" placeholder="0" step="1000"></div>
+          </label>
+        </div>
+        <div class="modal-row">
+          <label class="field"><span>Fecha</span>
+            <input type="date" id="m-date">
+          </label>
+          <label class="field"><span>Repetición</span>
+            <select id="m-rec">
+              <option value="none">Una vez</option>
+              <option value="weekly">Semanal</option>
+              <option value="monthly">Mensual</option>
+            </select>
+          </label>
+        </div>
+        <label class="field"><span>Medio de cobro / pago</span>
+          <select id="m-medio">
+            <option value="transferencia">Transferencia</option>
+            <option value="efectivo">Efectivo</option>
+            <option value="cheque">Cheque</option>
+            <option value="tarjeta">Tarjeta</option>
+          </select>
+        </label>
+        <label class="field"><span>Cuenta</span>
+          <select id="m-account"></select>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-ghost" id="mov-modal-cancel">Cancelar</button>
+        <button class="btn-primary" id="mov-modal-save">Agregar</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/app.js?v=1"></script>
 </body>

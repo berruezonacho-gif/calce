@@ -15,53 +15,197 @@ const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<"
 // Estado
 const state = {
   movements: [],
+  accounts: [
+    { id: "efectivo", name: "Efectivo", opening: 300000 },
+    { id: "banco", name: "Banco", opening: 500000 },
+  ],
   result: null,
+  cfAccount: "", // filtro de cuenta en la tabla ("" = todas)
 };
 
-// ── Movimientos ──────────────────────────────────────────
+let _acctSeq = 1;
+function newAccountId() { return "acc" + (_acctSeq++) + "-" + Date.now().toString(36); }
+
+// ── Movimientos (guardados en state.movements, no en el DOM) ──
+function openMovModal(editIndex = null) {
+  state.editingMov = editIndex;
+  const isEdit = editIndex !== null;
+  $("#mov-modal-title").textContent = isEdit ? "Editar movimiento" : "Nuevo movimiento";
+  $("#mov-modal-save").textContent = isEdit ? "Guardar" : "Agregar";
+
+  const m = isEdit ? state.movements[editIndex] : null;
+  $("#m-label").value = m ? m.label : "";
+  $("#m-value").value = m ? Math.abs(m.amount) : "";
+  $("#m-sign").value = m ? (m.amount < 0 ? "-1" : "1") : "1";
+  $("#m-date").value = m ? m.date : new Date().toISOString().slice(0, 10);
+  $("#m-rec").value = m ? m.recurrence : "none";
+  $("#m-medio").value = m ? (m.medio || "transferencia") : "transferencia";
+  syncAccountSelectors();
+  $("#m-account").value = m && m.account ? m.account : (state.accounts[0]?.id || "");
+
+  // Botón eliminar: solo al editar
+  let delBtn = $("#mov-modal-del");
+  if (isEdit) {
+    if (!delBtn) {
+      delBtn = document.createElement("button");
+      delBtn.id = "mov-modal-del";
+      delBtn.className = "btn-ghost danger";
+      delBtn.textContent = "Eliminar";
+      $(".modal-foot").insertBefore(delBtn, $(".modal-foot").firstChild);
+    }
+    delBtn.style.display = "";
+    delBtn.onclick = () => {
+      state.movements.splice(editIndex, 1);
+      closeMovModal();
+      project();
+    };
+  } else if (delBtn) {
+    delBtn.style.display = "none";
+  }
+
+  $("#mov-modal").classList.remove("hidden");
+  setTimeout(() => $("#m-label").focus(), 50);
+}
+
+function closeMovModal() {
+  state.editingMov = null;
+  $("#mov-modal").classList.add("hidden");
+}
+
+function saveMovFromModal() {
+  const label = $("#m-label").value.trim();
+  const value = parseFloat($("#m-value").value);
+  if (!label || !value) {
+    alert("Completá el concepto y el monto.");
+    return;
+  }
+  const mov = {
+    label,
+    amount: value * parseInt($("#m-sign").value, 10),
+    date: $("#m-date").value,
+    recurrence: $("#m-rec").value,
+    medio: $("#m-medio").value,
+    account: $("#m-account").value || (state.accounts[0]?.id || ""),
+  };
+  if (state.editingMov !== null && state.editingMov !== undefined) {
+    state.movements[state.editingMov] = mov;
+  } else {
+    state.movements.push(mov);
+  }
+  closeMovModal();
+  project();
+}
+
 function addMovement(data = {}) {
-  const tpl = $("#mov-template").content.cloneNode(true);
-  const row = tpl.querySelector(".mov-row");
-  const today = new Date().toISOString().slice(0, 10);
-
-  row.querySelector(".mov-label").value = data.label || "";
-  row.querySelector(".mov-value").value = data.value != null ? Math.abs(data.value) : "";
-  row.querySelector(".mov-sign").value = data.sign || (data.value < 0 ? "-1" : "1");
-  row.querySelector(".mov-date").value = data.date || today;
-  row.querySelector(".mov-rec").value = data.recurrence || "none";
-  row.querySelector(".mov-medio").value = data.medio || "transferencia";
-
-  row.querySelectorAll("input, select").forEach((el) =>
-    el.addEventListener("input", () => { project(); })
-  );
-  row.querySelector(".mov-del").addEventListener("click", () => {
-    row.remove();
-    project();
+  // Alta programática (demo, import): agrega a state.movements
+  if (!data.label && data.value == null) return;
+  state.movements.push({
+    label: data.label || "",
+    amount: data.value != null ? data.value : (data.amount || 0),
+    date: data.date || new Date().toISOString().slice(0, 10),
+    recurrence: data.recurrence || "none",
+    medio: data.medio || "transferencia",
+    account: data.account || (state.accounts[0]?.id || ""),
   });
-  $("#mov-list").appendChild(row);
 }
 
 function readMovements() {
-  return $$(".mov-row").map((row) => {
-    const value = parseFloat(row.querySelector(".mov-value").value) || 0;
-    const sign = parseInt(row.querySelector(".mov-sign").value, 10);
-    return {
-      label: row.querySelector(".mov-label").value,
-      amount: value * sign,
-      date: row.querySelector(".mov-date").value,
-      recurrence: row.querySelector(".mov-rec").value,
-      medio: row.querySelector(".mov-medio").value,
+  return state.movements.filter((m) => m.amount !== 0 && m.date);
+}
+
+// ── Cuentas ──────────────────────────────────────────────
+function totalOpening() {
+  return state.accounts.reduce((s, a) => s + (parseFloat(a.opening) || 0), 0);
+}
+
+function renderAccounts() {
+  const list = $("#accounts-list");
+  if (!list) return;
+  list.innerHTML = state.accounts.map((a) => `
+    <div class="account-row" data-id="${a.id}">
+      <input class="acc-name" type="text" value="${h(a.name)}" placeholder="Nombre">
+      <div class="money-input sm"><em>$</em><input class="acc-opening" type="number" value="${a.opening}" step="1000"></div>
+      <button class="acc-del" title="Eliminar cuenta">×</button>
+    </div>`).join("");
+
+  $$(".account-row").forEach((row) => {
+    const id = row.dataset.id;
+    const acc = state.accounts.find((a) => a.id === id);
+    row.querySelector(".acc-name").oninput = (e) => { acc.name = e.target.value; renderAccountsTotal(); syncAccountSelectors(); };
+    row.querySelector(".acc-opening").oninput = (e) => { acc.opening = parseFloat(e.target.value) || 0; renderAccountsTotal(); project(); };
+    row.querySelector(".acc-del").onclick = () => {
+      if (state.accounts.length <= 1) { alert("Tenés que tener al menos una cuenta."); return; }
+      state.accounts = state.accounts.filter((a) => a.id !== id);
+      // Reasignar movimientos huérfanos a la primera cuenta
+      const fallback = state.accounts[0].id;
+      state.movements.forEach((m) => { if (m.account === id) m.account = fallback; });
+      renderAccounts(); renderAccountsTotal(); syncAccountSelectors(); project();
     };
-  }).filter((m) => m.amount !== 0 && m.date);
+  });
+  renderAccountsTotal();
+}
+
+function renderAccountsTotal() {
+  const el = $("#accounts-total");
+  if (el) el.innerHTML = `<span>Saldo inicial total</span><b>${money(totalOpening())}</b>`;
+}
+
+function addAccount() {
+  state.accounts.push({ id: newAccountId(), name: "Nueva cuenta", opening: 0 });
+  renderAccounts(); syncAccountSelectors(); project();
+}
+
+// Mantiene sincronizados los <select> de cuenta (modal + filtro tabla)
+function syncAccountSelectors() {
+  const opts = state.accounts.map((a) => `<option value="${a.id}">${h(a.name)}</option>`).join("");
+  const mSel = $("#m-account");
+  if (mSel) { const cur = mSel.value; mSel.innerHTML = opts; if (state.accounts.find(a=>a.id===cur)) mSel.value = cur; }
+  const fSel = $("#cf-account-filter");
+  if (fSel) {
+    const cur = fSel.value;
+    fSel.innerHTML = `<option value="">Todas las cuentas</option>` + opts;
+    fSel.value = state.accounts.find(a=>a.id===cur) ? cur : "";
+  }
+}
+
+function accountName(id) {
+  const a = state.accounts.find((x) => x.id === id);
+  return a ? a.name : "—";
+}
+
+function renderMovSummary() {
+  const movs = state.movements;
+  const el = $("#mov-summary");
+  if (!el) return;
+  if (!movs.length) {
+    el.innerHTML = `<p class="mov-empty">Todavía no cargaste movimientos. Tocá <b>+ Agregar</b> o <b>Importar</b> un Excel.</p>`;
+    return;
+  }
+  const ingresos = movs.filter((m) => m.amount > 0).length;
+  const egresos = movs.filter((m) => m.amount < 0).length;
+  el.innerHTML = `
+    <div class="mov-count">
+      <div><b>${movs.length}</b><small>movimientos</small></div>
+      <div><b class="in">${ingresos}</b><small>ingresos</small></div>
+      <div><b class="out">${egresos}</b><small>egresos</small></div>
+    </div>
+    <p class="mov-hint">Tocá cualquier movimiento en <b>Detalle por fecha</b> para editarlo o eliminarlo.</p>`;
 }
 
 // ── Proyección ───────────────────────────────────────────
 async function project() {
+  renderMovSummary();
+  renderAccountsTotal();
+  const filterAcct = state.cfAccount; // "" = consolidado
+  const movs = readMovements().filter((m) => !filterAcct || m.account === filterAcct);
+  const opening = filterAcct
+    ? (parseFloat(state.accounts.find((a) => a.id === filterAcct)?.opening) || 0)
+    : totalOpening();
   const body = {
-    opening_balance: parseFloat($("#opening").value) || 0,
+    opening_balance: opening,
     min_buffer: parseFloat($("#buffer").value) || 0,
     horizon_days: parseInt($("#horizon").value, 10),
-    movements: readMovements(),
+    movements: movs,
   };
   try {
     const res = await fetch("/api/cashflow/project", {
@@ -71,6 +215,7 @@ async function project() {
     });
     state.result = await res.json();
     renderKPIs();
+    renderAccountBalances();
     renderChart();
     renderCashflowTable();
     renderInsights();
@@ -78,6 +223,57 @@ async function project() {
   } catch (e) {
     console.error("Error al proyectar:", e);
   }
+}
+
+// ── Saldo por cuenta ─────────────────────────────────────
+function renderAccountBalances() {
+  const el = $("#account-balances");
+  if (!el) return;
+  const horizon = parseInt($("#horizon").value, 10);
+  const end = new Date(); end.setDate(end.getDate() + horizon);
+  const start = new Date(); start.setHours(0,0,0,0);
+
+  const balances = state.accounts.map((a) => {
+    let bal = parseFloat(a.opening) || 0;
+    state.movements.forEach((m) => {
+      if (m.account !== a.id || !m.amount || !m.date) return;
+      const base = new Date(m.date + "T00:00:00");
+      if (m.recurrence === "none") {
+        if (base >= start && base <= end) bal += m.amount;
+      } else {
+        let d = new Date(base), guard = 0;
+        while (d <= end && guard < 500) {
+          if (d >= start) bal += m.amount;
+          if (m.recurrence === "weekly") d.setDate(d.getDate() + 7);
+          else if (m.recurrence === "monthly") d.setMonth(d.getMonth() + 1);
+          else break;
+          guard++;
+        }
+      }
+    });
+    return { ...a, projected: bal };
+  });
+
+  el.innerHTML = balances.map((a) => `
+    <button class="acct-balance ${state.cfAccount === a.id ? "active" : ""}" data-acct="${a.id}">
+      <small>${h(a.name)}</small>
+      <b>${money(a.projected)}</b>
+      <span>al cierre</span>
+    </button>`).join("") +
+    `<button class="acct-balance total ${!state.cfAccount ? "active" : ""}" data-acct="">
+      <small>Consolidado</small>
+      <b>${money(balances.reduce((s, a) => s + a.projected, 0))}</b>
+      <span>todas</span>
+    </button>`;
+
+  $$(".acct-balance").forEach((btn) => {
+    btn.onclick = () => {
+      state.cfAccount = btn.dataset.acct;
+      const fSel = $("#cf-account-filter");
+      if (fSel) fSel.value = state.cfAccount;
+      project();
+    };
+  });
 }
 
 // ── KPIs ─────────────────────────────────────────────────
@@ -250,12 +446,12 @@ function renderTableDaily(days) {
     </tr>`;
     let detailRows = "";
     if (open && detail.length) {
-      detailRows = detail.map((m) => `<tr class="cf-detail">
+      detailRows = detail.map((m) => `<tr class="cf-detail cf-mov-edit" data-idx="${m._idx}" title="Tocá para editar o eliminar">
         <td></td>
-        <td class="cf-detail-label" colspan="1">${h(m.label || "(sin concepto)")}</td>
+        <td class="cf-detail-label" colspan="1">${h(m.label || "(sin concepto)")} <span class="cf-edit-hint">editar</span></td>
         <td class="${m.amount > 0 ? "in" : "muted"}">${m.amount > 0 ? "+" + money(m.amount) : "—"}</td>
         <td class="${m.amount < 0 ? "out" : "muted"}">${m.amount < 0 ? "−" + money(Math.abs(m.amount)) : "—"}</td>
-        <td colspan="1" class="cf-medio">${medioLabel(m.medio)}</td>
+        <td colspan="1" class="cf-medio">${medioLabel(m.medio)} · ${h(accountName(m.account))}</td>
         <td colspan="2"></td>
       </tr>`).join("");
     }
@@ -272,7 +468,7 @@ function renderTableDaily(days) {
       </table>
     </div>
     <div class="cf-table-foot">
-      <span>${withMov.length} días con movimiento · tocá una fila para ver el detalle</span>
+      <span>${withMov.length} días con movimiento · tocá una fila para ver el detalle, y un movimiento para editarlo</span>
     </div>`;
 
   $$(".cf-row").forEach((row) => {
@@ -280,6 +476,13 @@ function renderTableDaily(days) {
       const day = row.dataset.day;
       state.cfOpenDay = state.cfOpenDay === day ? null : day;
       renderCashflowTable();
+    };
+  });
+  // Click en un movimiento del detalle → editar (sin togglear el día)
+  $$(".cf-mov-edit").forEach((r) => {
+    r.onclick = (e) => {
+      e.stopPropagation();
+      openMovModal(parseInt(r.dataset.idx, 10));
     };
   });
   wireExport();
@@ -332,13 +535,15 @@ function renderTableWeekly(days) {
 
 // Construye {fecha: [movimientos]} expandiendo recurrencias, para el detalle diario
 function getMovementsByDate() {
-  const movs = readMovements();
+  const movs = state.movements;
   const byDate = {};
   const start = new Date();
   const end = new Date(); end.setDate(end.getDate() + 400);
-  movs.forEach((m) => {
+  movs.forEach((m, idx) => {
+    if (!m.amount || !m.date) return;
+    if (state.cfAccount && m.account !== state.cfAccount) return; // filtro por cuenta
     const base = new Date(m.date + "T00:00:00");
-    const push = (iso) => { (byDate[iso] = byDate[iso] || []).push(m); };
+    const push = (iso) => { (byDate[iso] = byDate[iso] || []).push({ ...m, _idx: idx }); };
     if (m.recurrence === "none") { push(m.date); return; }
     let d = new Date(base), guard = 0;
     while (d <= end && guard < 500) {
@@ -1398,8 +1603,16 @@ function renderConcResult(r, extractoCount) {
 }
 
 // ── Navegación ───────────────────────────────────────────
+const INV_GROUP = ["inversiones", "excedente", "fci", "mercado"];
 function switchView(view) {
   $$(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.view === view));
+  $$(".nav-sub").forEach((n) => n.classList.toggle("active", n.dataset.view === view));
+  // Marcar el grupo "Inversiones" activo si estamos en una de sus vistas
+  const dropBtn = document.querySelector(".nav-drop-btn");
+  if (dropBtn) dropBtn.classList.toggle("group-active", INV_GROUP.includes(view));
+  // Cerrar el menú
+  document.querySelector(".nav-dropdown")?.classList.remove("open");
+
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${view}`).classList.remove("hidden");
   if (view === "inversiones") renderInversiones();
@@ -1413,14 +1626,23 @@ function switchView(view) {
 function init() {
   // Movimientos de ejemplo (una PyME típica)
   const demo = [
-    { label: "Cobranzas de clientes", value: 500000, date: monthDay(25), recurrence: "monthly" },
-    { label: "Sueldos", value: -350000, date: monthDay(28), recurrence: "monthly" },
-    { label: "Alquiler", value: -120000, date: monthDay(10), recurrence: "monthly" },
-    { label: "Pago a proveedor", value: -80000, date: addDays(15), recurrence: "none" },
+    { label: "Cobranzas de clientes", value: 500000, date: monthDay(25), recurrence: "monthly", account: "banco", medio: "transferencia" },
+    { label: "Sueldos", value: -350000, date: monthDay(28), recurrence: "monthly", account: "banco", medio: "transferencia" },
+    { label: "Alquiler", value: -120000, date: monthDay(10), recurrence: "monthly", account: "banco", medio: "transferencia" },
+    { label: "Ventas mostrador", value: 180000, date: addDays(3), recurrence: "weekly", account: "efectivo", medio: "efectivo" },
+    { label: "Pago a proveedor", value: -80000, date: addDays(15), recurrence: "none", account: "efectivo", medio: "efectivo" },
   ];
   demo.forEach(addMovement);
 
-  $("#add-mov").addEventListener("click", () => { addMovement(); });
+  $("#add-mov").addEventListener("click", () => openMovModal());
+
+  // Modal de movimiento
+  $("#mov-modal-close").addEventListener("click", closeMovModal);
+  $("#mov-modal-cancel").addEventListener("click", closeMovModal);
+  $("#mov-modal").addEventListener("click", (e) => {
+    if (e.target.id === "mov-modal") closeMovModal();
+  });
+  $("#mov-modal-save").addEventListener("click", saveMovFromModal);
 
   // Importar desde Excel/CSV
   $("#import-mov").addEventListener("click", () => $("#import-file").click());
@@ -1439,13 +1661,14 @@ function init() {
         alert(data.error || "No se pudo importar el archivo.");
         return;
       }
-      // Limpiar movimientos actuales y cargar los importados
-      $("#mov-list").innerHTML = "";
+      // Reemplazar los movimientos actuales por los importados
+      state.movements = [];
       data.movements.forEach((m) => addMovement({
         label: m.label,
         value: m.amount,
         date: m.date,
         recurrence: m.recurrence || "none",
+        medio: m.medio,
       }));
       project();
       const skipped = data.skipped ? ` (${data.skipped} filas sin datos válidos se omitieron)` : "";
@@ -1457,12 +1680,33 @@ function init() {
       e.target.value = "";
     }
   });
-  ["#opening", "#buffer", "#horizon"].forEach((sel) =>
+  ["#buffer", "#horizon"].forEach((sel) =>
     $(sel).addEventListener("input", project)
   );
-  $$(".nav-item").forEach((n) =>
+  // Cuentas
+  renderAccounts();
+  syncAccountSelectors();
+  $("#add-account").addEventListener("click", addAccount);
+  $("#cf-account-filter").addEventListener("change", (e) => {
+    state.cfAccount = e.target.value;
+    project();
+  });
+  $$(".nav-item[data-view]").forEach((n) =>
     n.addEventListener("click", () => { if (!n.disabled) switchView(n.dataset.view); })
   );
+  $$(".nav-sub").forEach((n) =>
+    n.addEventListener("click", () => switchView(n.dataset.view))
+  );
+  // Dropdown de Inversiones: abrir/cerrar
+  const dropBtn = document.querySelector(".nav-drop-btn");
+  const dropdown = document.querySelector(".nav-dropdown");
+  if (dropBtn && dropdown) {
+    dropBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      dropdown.classList.toggle("open");
+    });
+    document.addEventListener("click", () => dropdown.classList.remove("open"));
+  }
 
   // Toggle día / semana en la tabla
   $$(".vt-btn").forEach((b) =>
