@@ -590,3 +590,11 @@ input:focus, select:focus {
 .cf-detail td { background: var(--paper); font-size: 12px; padding: 6px 14px; border-bottom: 1px solid var(--line-2); }
 .cf-detail-label { font-family: "Inter", sans-serif !important; color: var(--ink) !important; text-align: left !important; }
 .cf-medio { font-family: "Inter", sans-serif !important; color: var(--slate) !important; font-size: 11.5px !important; text-align: left !important; }
+
+/* ── Badge "última foto" ─────────────────────────────────── */
+.stale-badge {
+  display: inline-block; margin-left: 8px; font-family: "Inter", sans-serif;
+  font-size: 10.5px; font-weight: 600; text-transform: none; letter-spacing: 0;
+  background: var(--amber-bg); color: var(--amber);
+  padding: 2px 9px; border-radius: 20px; vertical-align: middle;
+}

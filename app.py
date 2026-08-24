@@ -260,6 +260,7 @@ def mercado_carry():
     rentable. Breakeven anual = devaluación anualizada que empata contra el dólar.
     """
     boards = renta_fija.boards()
+    is_stale = boards.get("stale", False)
     fams = boards.get("families", {})
     df = boards.get("dolares_financieros", {})
     al30 = next((b for b in df.get("al", []) if b.get("ticker") == "AL30"), {})
@@ -291,7 +292,7 @@ def mercado_carry():
             rows.append(item)
     rows.sort(key=lambda r: r["dias"])
     from datetime import datetime as _dtm
-    return {"ok": True, "dolares": dolares, "rows": rows,
+    return {"ok": True, "dolares": dolares, "rows": rows, "stale": is_stale,
             "updated_at": _dtm.now().isoformat(timespec="minutes"),
             "bandas": bcra.bandas_cambiarias(14),
             "formula": "Dólar equilibrio = Dólar actual × (Valor final / Precio actual)"}

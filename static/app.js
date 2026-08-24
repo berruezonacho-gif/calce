@@ -928,6 +928,7 @@ async function renderMercadoCarry() {
       return;
     }
     const dol = d.dolares || {};
+    const staleBadge = d.stale ? `<span class="stale-badge" title="El mercado está cerrado o BYMA no responde ahora. Se muestra la última cotización guardada.">Última foto guardada</span>` : "";
     const dolKey = state.carryDol || "mep";
     const boncaps = d.rows.filter((r) => r.tipo === "BONCAP");
     const lecaps = d.rows.filter((r) => r.tipo === "LECAP");
@@ -947,7 +948,7 @@ async function renderMercadoCarry() {
       </table></div>` : "";
 
     wrap.innerHTML = `${_mktTabs()}
-      <div class="mkt-head"><div class="eyebrow">Carry trade en dólares</div>
+      <div class="mkt-head"><div class="eyebrow">Carry trade en dólares ${staleBadge}</div>
         <h2 class="inv-title">Dólar de equilibrio</h2>
         <p class="inv-sub">El valor al que debería estar el dólar al vencimiento para que comprar la letra hoy equivalga a comprar dólares. Si el dólar queda por debajo del equilibrio, el carry fue rentable.</p></div>
       <div class="carry-dolares">${[["oficial","Oficial"],["mep","MEP"],["blue","Blue"],["ccl","CCL"]].map(([k,l]) =>

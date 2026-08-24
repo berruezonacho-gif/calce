@@ -148,7 +148,15 @@ def _sovereign_metrics(base: str, price: float, currency: str) -> dict:
 
 
 def boards(force: bool = False) -> dict:
-    """Todos los boards por familia + dólares financieros."""
+    """Todos los boards por familia + dólares financieros.
+
+    Cachea el último resultado bueno (con precios) y lo reutiliza como fallback
+    cuando BYMA no responde o el mercado está cerrado (los bonos vendrían sin
+    precio). Así la sección siempre muestra la última foto disponible.
+    """
+    from .cache import get_json_stale, set_json
+    CACHE_KEY = "renta_fija_boards"
+
     pb = bymadata.public_bonds(force=force)
     lb = bymadata.lebacs(force=force)
     rows = (pb.get("rows") or []) + (lb.get("rows") or [])
@@ -234,10 +242,26 @@ def boards(force: bool = False) -> dict:
     for fam in families:
         families[fam].sort(key=lambda x: x.get("days") or 99999)
 
-    return {
+    # ¿El resultado tiene precios utilizables? Contamos bonos con precio.
+    con_precio = sum(
+        1 for fam in families.values() for b in fam if b.get("price")
+    )
+    result = {
         "ok": True,
         "source": "BYMADATA public-bonds + lebacs",
         "families": families,
         "dolares_financieros": {"al": dolares_al, "gd": dolares_gd},
         "counts": {k: len(v) for k, v in families.items()},
     }
+
+    if con_precio >= 3:
+        # Buen resultado: lo guardamos como última foto y lo devolvemos.
+        set_json(CACHE_KEY, result)
+        return result
+
+    # Sin precios (mercado cerrado o BYMA caído): devolvemos la última foto buena.
+    stale = get_json_stale(CACHE_KEY)
+    if stale:
+        stale = {**stale, "stale": True}
+        return stale
+    return result

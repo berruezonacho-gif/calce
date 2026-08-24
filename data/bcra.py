@@ -18,7 +18,7 @@ from datetime import date, timedelta
 
 import httpx
 
-from .cache import get_json, set_json
+from .cache import get_json, get_json_stale, set_json
 
 _API = "https://api.bcra.gob.ar/estadisticas/v4.0/monetarias"
 
@@ -123,4 +123,13 @@ def variables(force: bool = False) -> dict:
         {"nombre": "CCL", "valor": out["ccl"]["valor"], "brecha": brecha(out["ccl"]["valor"]), "color": "#e8a44f"},
     ]
     out["bandas"] = bandas_cambiarias(12)
+
+    # ¿Trajo datos utilizables? Si las series del BCRA y los dólares vinieron
+    # vacíos, devolvemos la última foto buena (mercado cerrado / API caída).
+    con_datos = sum(1 for v in out["vars"].values() if v.get("valor") is not None)
+    if con_datos >= 2 or out["blue"].get("valor"):
+        return set_json(cache_key, out)
+    stale = get_json_stale(cache_key)
+    if stale:
+        return {**stale, "stale": True}
     return set_json(cache_key, out)
