@@ -10,18 +10,76 @@ const fmt = (n) => {
   return Math.round(n).toString();
 };
 const money = (n) => "$" + new Intl.NumberFormat("es-AR", { maximumFractionDigits: 0 }).format(Math.round(n));
+const ccySymbol = (ccy) => (ccy === "USD" ? "US$" : "$");
+const moneyC = (n, ccy) => ccySymbol(ccy) + " " + new Intl.NumberFormat("es-AR", { maximumFractionDigits: 0 }).format(Math.round(n));
 const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 // Estado
 const state = {
   movements: [],
   accounts: [
-    { id: "efectivo", name: "Efectivo", opening: 300000 },
-    { id: "banco", name: "Banco", opening: 500000 },
+    { id: "efectivo", name: "Caja / Efectivo", banco: "", tipo: "efectivo", moneda: "ARS", alias: "", opening: 300000 },
+    { id: "banco", name: "Cuenta principal", banco: "Banco de la Nación Argentina", tipo: "cc", moneda: "ARS", alias: "", opening: 500000 },
   ],
+  empresa: { nombre: "", cuit: "", provincia: "" },
+  prefs: { moneda: "ARS", formatoFecha: "dd/mm/aa", colchon: 200000, horizonte: 90 },
+  impuestos: { iva: 21, iibb: 3 },
   result: null,
-  cfAccount: "", // filtro de cuenta en la tabla ("" = todas)
+  cfAccount: "",
+  cfCurrency: "ARS", // moneda activa del flujo (ARS / USD)
 };
+
+const TIPOS_CUENTA = [
+  { v: "ca", label: "Caja de ahorro" },
+  { v: "cc", label: "Cuenta corriente" },
+  { v: "efectivo", label: "Efectivo / Caja" },
+];
+
+// ── Persistencia (autoguardado en el navegador) ──────────
+const STORE_KEY = "calce.state.v1";
+let _saveTimer = null;
+function saveState() {
+  // Debounce para no escribir en cada tecla
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    try {
+      const snapshot = {
+        movements: state.movements,
+        accounts: state.accounts,
+        empresa: state.empresa,
+        prefs: state.prefs,
+        impuestos: state.impuestos,
+        _acctSeq,
+      };
+      localStorage.setItem(STORE_KEY, JSON.stringify(snapshot));
+      flashSaved();
+    } catch (e) { console.warn("No se pudo guardar:", e); }
+  }, 400);
+}
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (!raw) return false;
+    const s = JSON.parse(raw);
+    if (s.movements) state.movements = s.movements;
+    if (s.accounts) state.accounts = s.accounts;
+    if (s.empresa) state.empresa = s.empresa;
+    if (s.prefs) state.prefs = s.prefs;
+    if (s.impuestos) state.impuestos = s.impuestos;
+    if (s._acctSeq) _acctSeq = s._acctSeq;
+    return true;
+  } catch (e) { console.warn("No se pudo cargar:", e); return false; }
+}
+function clearState() {
+  localStorage.removeItem(STORE_KEY);
+}
+function flashSaved() {
+  const el = $("#save-indicator");
+  if (!el) return;
+  el.classList.add("show");
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove("show"), 1200);
+}
 
 let _acctSeq = 1;
 function newAccountId() { return "acc" + (_acctSeq++) + "-" + Date.now().toString(36); }
@@ -42,6 +100,22 @@ function openMovModal(editIndex = null) {
   $("#m-medio").value = m ? (m.medio || "transferencia") : "transferencia";
   syncAccountSelectors();
   $("#m-account").value = m && m.account ? m.account : (state.accounts[0]?.id || "");
+
+  // Modo: si el movimiento es cheque, abrir en modo cheque
+  const mode = m && m.medio === "cheque" && m.venc ? "cheque" : "simple";
+  setMovMode(mode);
+  if (mode === "cheque") {
+    $("#m-emision").value = m.emision || new Date().toISOString().slice(0, 10);
+    $("#m-venc").value = m.venc || m.date;
+  } else {
+    $("#m-emision").value = new Date().toISOString().slice(0, 10);
+    $("#m-venc").value = "";
+  }
+  // Cuotas siempre arranca limpio (2 cuotas base)
+  state._cuotas = [{ date: new Date().toISOString().slice(0, 10), amount: "" }, { date: "", amount: "" }];
+  renderCuotas();
+  // Actualizar símbolo de moneda según la cuenta elegida
+  updateModalCurrency();
 
   // Botón eliminar: solo al editar
   let delBtn = $("#mov-modal-del");
@@ -67,6 +141,52 @@ function openMovModal(editIndex = null) {
   setTimeout(() => $("#m-label").focus(), 50);
 }
 
+// Modo del modal: simple / cheque / cuotas
+function setMovMode(mode) {
+  state._movMode = mode;
+  $$(".mov-mode").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+  $("#m-simple-row").style.display = mode === "simple" ? "" : "none";
+  $("#m-cheque-block").style.display = mode === "cheque" ? "" : "none";
+  $("#m-cuotas-block").style.display = mode === "cuotas" ? "" : "none";
+  // En cuotas, el monto total es informativo (se calcula de las cuotas)
+  $("#m-value-label").textContent = mode === "cuotas" ? "Monto total (se reparte)" : "Monto";
+  // En cheque, forzar medio=cheque
+  if (mode === "cheque") $("#m-medio").value = "cheque";
+}
+
+function updateModalCurrency() {
+  const acc = state.accounts.find((a) => a.id === $("#m-account").value);
+  $("#m-cur").textContent = acc && acc.moneda === "USD" ? "US$" : "$";
+}
+
+function renderCuotas() {
+  const list = $("#m-cuotas-list");
+  if (!list) return;
+  const cuotas = state._cuotas || [];
+  list.innerHTML = cuotas.map((c, i) => `
+    <div class="cuota-row" data-i="${i}">
+      <input type="date" class="cuota-date" value="${c.date}">
+      <div class="money-input sm"><em>${$("#m-cur").textContent}</em><input type="number" class="cuota-amount" value="${c.amount}" placeholder="0" step="1000"></div>
+      <button type="button" class="cuota-del" title="Quitar">×</button>
+    </div>`).join("");
+  list.querySelectorAll(".cuota-row").forEach((row) => {
+    const i = parseInt(row.dataset.i, 10);
+    row.querySelector(".cuota-date").oninput = (e) => { state._cuotas[i].date = e.target.value; };
+    row.querySelector(".cuota-amount").oninput = (e) => { state._cuotas[i].amount = e.target.value; updateCuotasTotal(); };
+    row.querySelector(".cuota-del").onclick = () => {
+      if (state._cuotas.length <= 1) return;
+      state._cuotas.splice(i, 1); renderCuotas();
+    };
+  });
+  updateCuotasTotal();
+}
+
+function updateCuotasTotal() {
+  const total = (state._cuotas || []).reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+  const el = $("#m-cuotas-total");
+  if (el) el.textContent = total > 0 ? `Total en cuotas: ${$("#m-cur").textContent} ${new Intl.NumberFormat("es-AR").format(total)}` : "";
+}
+
 function closeMovModal() {
   state.editingMov = null;
   $("#mov-modal").classList.add("hidden");
@@ -74,26 +194,60 @@ function closeMovModal() {
 
 function saveMovFromModal() {
   const label = $("#m-label").value.trim();
-  const value = parseFloat($("#m-value").value);
-  if (!label || !value) {
-    alert("Completá el concepto y el monto.");
-    return;
+  const sign = parseInt($("#m-sign").value, 10);
+  const medio = $("#m-medio").value;
+  const account = $("#m-account").value || (state.accounts[0]?.id || "");
+  const mode = state._movMode || "simple";
+
+  if (!label) { alert("Completá el concepto."); return; }
+
+  if (mode === "cuotas") {
+    const cuotas = (state._cuotas || []).filter((c) => c.date && parseFloat(c.amount));
+    if (!cuotas.length) { alert("Cargá al menos una cuota con fecha y monto."); return; }
+    // Al editar en modo cuotas, reemplazamos el movimiento original y agregamos el resto
+    if (isEditingMov()) state.movements.splice(state.editingMov, 1);
+    cuotas.forEach((c, idx) => {
+      state.movements.push({
+        label: `${label} (cuota ${idx + 1}/${cuotas.length})`,
+        amount: Math.abs(parseFloat(c.amount)) * sign,
+        date: c.date, recurrence: "none", medio, account,
+      });
+    });
+    closeMovModal(); project(); return;
   }
+
+  if (mode === "cheque") {
+    const venc = $("#m-venc").value;
+    const emision = $("#m-emision").value;
+    const value = parseFloat($("#m-value").value);
+    if (!value || !venc) { alert("Completá el monto y la fecha de vencimiento."); return; }
+    const mov = {
+      label, amount: Math.abs(value) * sign,
+      date: venc,           // impacta la caja al vencimiento
+      recurrence: "none", medio: "cheque", account,
+      emision, venc,
+    };
+    if (isEditingMov()) state.movements[state.editingMov] = mov;
+    else state.movements.push(mov);
+    closeMovModal(); project(); return;
+  }
+
+  // Simple
+  const value = parseFloat($("#m-value").value);
+  if (!value) { alert("Completá el monto."); return; }
   const mov = {
-    label,
-    amount: value * parseInt($("#m-sign").value, 10),
+    label, amount: Math.abs(value) * sign,
     date: $("#m-date").value,
     recurrence: $("#m-rec").value,
-    medio: $("#m-medio").value,
-    account: $("#m-account").value || (state.accounts[0]?.id || ""),
+    medio, account,
   };
-  if (state.editingMov !== null && state.editingMov !== undefined) {
-    state.movements[state.editingMov] = mov;
-  } else {
-    state.movements.push(mov);
-  }
-  closeMovModal();
-  project();
+  if (isEditingMov()) state.movements[state.editingMov] = mov;
+  else state.movements.push(mov);
+  closeMovModal(); project();
+}
+
+function isEditingMov() {
+  return state.editingMov !== null && state.editingMov !== undefined;
 }
 
 function addMovement(data = {}) {
@@ -113,6 +267,30 @@ function readMovements() {
   return state.movements.filter((m) => m.amount !== 0 && m.date);
 }
 
+// Carga un dataset de demo completo (cuentas, empresa, prefs, movimientos)
+function loadDemoDataset(ds) {
+  if (ds.empresa) state.empresa = { ...state.empresa, ...ds.empresa };
+  if (ds.prefs) state.prefs = { ...state.prefs, ...ds.prefs };
+  if (ds.impuestos) state.impuestos = { ...state.impuestos, ...ds.impuestos };
+  if (ds.accounts) state.accounts = ds.accounts.map((a) => ({ ...a }));
+  // Aplicar prefs al panel
+  if ($("#buffer")) $("#buffer").value = state.prefs.colchon;
+  if ($("#horizon")) $("#horizon").value = state.prefs.horizonte;
+  // Movimientos: traducir fechas relativas "d+N" a ISO
+  state.movements = [];
+  (ds.movements || []).forEach((m) => {
+    let date = m.date;
+    const rel = /^d\+(\d+)$/.exec(m.date || "");
+    if (rel) date = addDays(parseInt(rel[1], 10));
+    state.movements.push({
+      label: m.label, amount: m.amount, date,
+      recurrence: m.recurrence || "none",
+      medio: m.medio || "transferencia",
+      account: m.account || (state.accounts[0]?.id || ""),
+    });
+  });
+}
+
 // ── Cuentas ──────────────────────────────────────────────
 function totalOpening() {
   return state.accounts.reduce((s, a) => s + (parseFloat(a.opening) || 0), 0);
@@ -123,26 +301,35 @@ function renderAccounts() {
   if (!list) return;
   list.innerHTML = state.accounts.map((a) => `
     <div class="account-row" data-id="${a.id}">
-      <input class="acc-name" type="text" value="${h(a.name)}" placeholder="Nombre">
+      <div class="acc-info">
+        <b>${h(a.name)}</b>
+        <small>${a.tipo === "efectivo" ? "Efectivo" : (h(bancoShort(a.banco)) + " · " + tipoLabel(a.tipo))}${a.moneda === "USD" ? " · USD" : ""}</small>
+      </div>
       <div class="money-input sm"><em>$</em><input class="acc-opening" type="number" value="${a.opening}" step="1000"></div>
-      <button class="acc-del" title="Eliminar cuenta">×</button>
-    </div>`).join("");
+    </div>`).join("") +
+    `<button class="acc-config-link" id="acc-config-link">⚙ Gestionar cuentas</button>`;
 
   $$(".account-row").forEach((row) => {
     const id = row.dataset.id;
     const acc = state.accounts.find((a) => a.id === id);
-    row.querySelector(".acc-name").oninput = (e) => { acc.name = e.target.value; renderAccountsTotal(); syncAccountSelectors(); };
     row.querySelector(".acc-opening").oninput = (e) => { acc.opening = parseFloat(e.target.value) || 0; renderAccountsTotal(); project(); };
-    row.querySelector(".acc-del").onclick = () => {
-      if (state.accounts.length <= 1) { alert("Tenés que tener al menos una cuenta."); return; }
-      state.accounts = state.accounts.filter((a) => a.id !== id);
-      // Reasignar movimientos huérfanos a la primera cuenta
-      const fallback = state.accounts[0].id;
-      state.movements.forEach((m) => { if (m.account === id) m.account = fallback; });
-      renderAccounts(); renderAccountsTotal(); syncAccountSelectors(); project();
-    };
   });
+  const link = $("#acc-config-link");
+  if (link) link.onclick = () => switchView("config");
   renderAccountsTotal();
+}
+
+function bancoShort(banco) {
+  if (!banco) return "Sin banco";
+  // Recorta el nombre largo del banco a algo compacto
+  const m = banco.match(/\(([^)]+)\)/);
+  if (m) return m[1];
+  return banco.replace(/^Banco (de la |de |del )?/, "").split(" ").slice(0, 2).join(" ");
+}
+
+function tipoLabel(tipo) {
+  const t = TIPOS_CUENTA.find((x) => x.v === tipo);
+  return t ? t.label : tipo;
 }
 
 function renderAccountsTotal() {
@@ -157,7 +344,10 @@ function addAccount() {
 
 // Mantiene sincronizados los <select> de cuenta (modal + filtro tabla)
 function syncAccountSelectors() {
-  const opts = state.accounts.map((a) => `<option value="${a.id}">${h(a.name)}</option>`).join("");
+  const opts = state.accounts.map((a) => {
+    const suffix = a.tipo === "efectivo" ? "" : ` (${bancoShort(a.banco)})`;
+    return `<option value="${a.id}">${h(a.name)}${h(suffix)}</option>`;
+  }).join("");
   const mSel = $("#m-account");
   if (mSel) { const cur = mSel.value; mSel.innerHTML = opts; if (state.accounts.find(a=>a.id===cur)) mSel.value = cur; }
   const fSel = $("#cf-account-filter");
@@ -171,6 +361,25 @@ function syncAccountSelectors() {
 function accountName(id) {
   const a = state.accounts.find((x) => x.id === id);
   return a ? a.name : "—";
+}
+
+// Resuelve el texto de cuenta del import contra las cuentas existentes.
+// Match por nombre, banco corto o alias (case-insensitive). Si no hay match
+// y el texto no está vacío, crea una cuenta nueva con ese nombre.
+function resolveAccountText(text) {
+  const t = (text || "").trim().toLowerCase();
+  if (!t) return state.accounts[0]?.id || "";
+  const found = state.accounts.find((a) =>
+    a.name.toLowerCase() === t ||
+    bancoShort(a.banco).toLowerCase() === t ||
+    (a.alias && a.alias.toLowerCase() === t) ||
+    a.name.toLowerCase().includes(t) || t.includes(a.name.toLowerCase())
+  );
+  if (found) return found.id;
+  // Crear cuenta nueva
+  const id = newAccountId();
+  state.accounts.push({ id, name: text.trim(), banco: "", tipo: "cc", moneda: "ARS", alias: "", opening: 0 });
+  return id;
 }
 
 function renderMovSummary() {
@@ -193,14 +402,35 @@ function renderMovSummary() {
 }
 
 // ── Proyección ───────────────────────────────────────────
+// Devuelve la moneda de un movimiento según la cuenta a la que pertenece
+function movCurrency(m) {
+  const a = state.accounts.find((x) => x.id === m.account);
+  return a ? a.moneda : "ARS";
+}
+// ¿Hay al menos una cuenta en USD?
+function hasUSD() { return state.accounts.some((a) => a.moneda === "USD"); }
+
 async function project() {
+  saveState();
   renderMovSummary();
   renderAccountsTotal();
-  const filterAcct = state.cfAccount; // "" = consolidado
-  const movs = readMovements().filter((m) => !filterAcct || m.account === filterAcct);
+  renderCurrencyTabs();
+
+  const filterAcct = state.cfAccount; // "" = consolidado de la moneda activa
+  const ccy = filterAcct
+    ? (state.accounts.find((a) => a.id === filterAcct)?.moneda || "ARS")
+    : state.cfCurrency;
+
+  // Movimientos: de la cuenta filtrada, o de todas las cuentas de la moneda activa
+  const movs = readMovements().filter((m) => {
+    if (filterAcct) return m.account === filterAcct;
+    return movCurrency(m) === ccy;
+  });
+  // Opening: de la cuenta filtrada, o suma de las cuentas de la moneda activa
   const opening = filterAcct
     ? (parseFloat(state.accounts.find((a) => a.id === filterAcct)?.opening) || 0)
-    : totalOpening();
+    : state.accounts.filter((a) => a.moneda === ccy).reduce((s, a) => s + (parseFloat(a.opening) || 0), 0);
+
   const body = {
     opening_balance: opening,
     min_buffer: parseFloat($("#buffer").value) || 0,
@@ -225,6 +455,25 @@ async function project() {
   }
 }
 
+// ── Selector de moneda (ARS / USD) ───────────────────────
+function renderCurrencyTabs() {
+  const el = $("#currency-tabs");
+  if (!el) return;
+  if (!hasUSD()) { el.innerHTML = ""; return; } // si no hay USD, no mostramos tabs
+  const tabs = [["ARS", "Pesos"], ["USD", "Dólares"]];
+  el.innerHTML = tabs.map(([c, label]) =>
+    `<button class="ccy-tab ${state.cfCurrency === c ? "active" : ""}" data-ccy="${c}">${ccySymbol(c)} ${label}</button>`
+  ).join("");
+  $$(".ccy-tab").forEach((b) => {
+    b.onclick = () => {
+      state.cfCurrency = b.dataset.ccy;
+      state.cfAccount = ""; // al cambiar moneda, volver a consolidado
+      const fSel = $("#cf-account-filter"); if (fSel) fSel.value = "";
+      project();
+    };
+  });
+}
+
 // ── Saldo por cuenta ─────────────────────────────────────
 function renderAccountBalances() {
   const el = $("#account-balances");
@@ -232,8 +481,11 @@ function renderAccountBalances() {
   const horizon = parseInt($("#horizon").value, 10);
   const end = new Date(); end.setDate(end.getDate() + horizon);
   const start = new Date(); start.setHours(0,0,0,0);
+  const ccy = state.cfCurrency;
 
-  const balances = state.accounts.map((a) => {
+  // Solo las cuentas de la moneda activa
+  const accts = state.accounts.filter((a) => a.moneda === ccy);
+  const balances = accts.map((a) => {
     let bal = parseFloat(a.opening) || 0;
     state.movements.forEach((m) => {
       if (m.account !== a.id || !m.amount || !m.date) return;
@@ -245,7 +497,9 @@ function renderAccountBalances() {
         while (d <= end && guard < 500) {
           if (d >= start) bal += m.amount;
           if (m.recurrence === "weekly") d.setDate(d.getDate() + 7);
+          else if (m.recurrence === "quincenal") d.setDate(d.getDate() + 14);
           else if (m.recurrence === "monthly") d.setMonth(d.getMonth() + 1);
+          else if (m.recurrence === "quarterly") d.setMonth(d.getMonth() + 3);
           else break;
           guard++;
         }
@@ -257,14 +511,14 @@ function renderAccountBalances() {
   el.innerHTML = balances.map((a) => `
     <button class="acct-balance ${state.cfAccount === a.id ? "active" : ""}" data-acct="${a.id}">
       <small>${h(a.name)}</small>
-      <b>${money(a.projected)}</b>
+      <b>${moneyC(a.projected, ccy)}</b>
       <span>al cierre</span>
     </button>`).join("") +
-    `<button class="acct-balance total ${!state.cfAccount ? "active" : ""}" data-acct="">
-      <small>Consolidado</small>
-      <b>${money(balances.reduce((s, a) => s + a.projected, 0))}</b>
-      <span>todas</span>
-    </button>`;
+    (balances.length > 1 ? `<button class="acct-balance total ${!state.cfAccount ? "active" : ""}" data-acct="">
+      <small>Consolidado ${ccySymbol(ccy)}</small>
+      <b>${moneyC(balances.reduce((s, a) => s + a.projected, 0), ccy)}</b>
+      <span>todas en ${ccy}</span>
+    </button>` : "");
 
   $$(".acct-balance").forEach((btn) => {
     btn.onclick = () => {
@@ -542,6 +796,7 @@ function getMovementsByDate() {
   movs.forEach((m, idx) => {
     if (!m.amount || !m.date) return;
     if (state.cfAccount && m.account !== state.cfAccount) return; // filtro por cuenta
+    if (!state.cfAccount && movCurrency(m) !== state.cfCurrency) return; // filtro por moneda activa
     const base = new Date(m.date + "T00:00:00");
     const push = (iso) => { (byDate[iso] = byDate[iso] || []).push({ ...m, _idx: idx }); };
     if (m.recurrence === "none") { push(m.date); return; }
@@ -549,7 +804,9 @@ function getMovementsByDate() {
     while (d <= end && guard < 500) {
       push(d.toISOString().slice(0, 10));
       if (m.recurrence === "weekly") d.setDate(d.getDate() + 7);
+      else if (m.recurrence === "quincenal") d.setDate(d.getDate() + 14);
       else if (m.recurrence === "monthly") d.setMonth(d.getMonth() + 1);
+      else if (m.recurrence === "quarterly") d.setMonth(d.getMonth() + 3);
       else break;
       guard++;
     }
@@ -681,6 +938,134 @@ function renderExcedente() {
     </div>`;
   const btn = $("#exc-invest-btn");
   if (btn) btn.addEventListener("click", () => switchView("inversiones"));
+}
+
+// ── Dólar: comprar / vender divisas ──────────────────────
+async function renderDivisas() {
+  const num2 = (v) => v == null ? "—" : new Intl.NumberFormat("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
+  const wrap = $("#divisas-wrap");
+  wrap.innerHTML = `<div class="inv-head"><div>
+    <div class="eyebrow">Dólar</div>
+    <h2 class="inv-title">Comprar o vender dólares</h2>
+    <p class="inv-sub">Simulá una operación de cambio entre una cuenta en pesos y una en dólares. Usa el tipo de cambio en vivo de la sección Variables.</p>
+  </div></div>
+  <div class="divisas-loading">Cargando cotizaciones…</div>`;
+
+  let vars = null;
+  try {
+    const res = await fetch("/api/mercado/variables");
+    vars = await res.json();
+  } catch (e) { /* fallback abajo */ }
+
+  const tc = {
+    oficial: vars?.cotizaciones?.find(c => c.nombre === "Mayorista")?.valor || vars?.vars?.mayorista?.valor || null,
+    mep: vars?.mep?.valor || null,
+    ccl: vars?.ccl?.valor || null,
+    blue: vars?.blue?.valor || null,
+  };
+  const stale = vars?.stale;
+
+  const arsAccts = state.accounts.filter(a => a.moneda === "ARS");
+  const usdAccts = state.accounts.filter(a => a.moneda === "USD");
+
+  if (!usdAccts.length) {
+    wrap.querySelector(".divisas-loading").outerHTML = `
+      <div class="card" style="padding:24px">
+        <p>Para operar dólares necesitás al menos una cuenta en USD. Agregala en <button class="cf-link" onclick="switchView('config')">Configuración</button>.</p>
+      </div>`;
+    return;
+  }
+  if (!arsAccts.length) {
+    wrap.querySelector(".divisas-loading").outerHTML = `
+      <div class="card" style="padding:24px"><p>Necesitás al menos una cuenta en pesos para operar.</p></div>`;
+    return;
+  }
+
+  const tcPairs = [["mep","MEP"],["ccl","CCL"],["blue","Blue"],["oficial","Oficial"]].filter(([k]) => tc[k]);
+  const tcOptions = tcPairs.map(([k,l]) => `<option value="${k}">${l} — $${num2(tc[k])}</option>`).join("");
+
+  wrap.querySelector(".divisas-loading").outerHTML = `
+    <div class="inv-board">
+      <aside class="inv-controls ctrl-card">
+        <div class="seg-toggle" id="dv-op">
+          <button class="seg active" data-op="comprar">Comprar USD</button>
+          <button class="seg" data-op="vender">Vender USD</button>
+        </div>
+        ${stale ? '<p class="modal-note">⚠ Cotización de la última foto guardada (mercado cerrado).</p>' : ''}
+        <label class="field"><span>Tipo de cambio</span>
+          <select id="dv-tc">${tcOptions}</select></label>
+        <label class="field"><span>Cuenta en pesos</span>
+          <select id="dv-ars">${arsAccts.map(a=>`<option value="${a.id}">${h(a.name)}</option>`).join("")}</select></label>
+        <label class="field"><span>Cuenta en dólares</span>
+          <select id="dv-usd">${usdAccts.map(a=>`<option value="${a.id}">${h(a.name)}</option>`).join("")}</select></label>
+        <label class="field"><span id="dv-amount-label">Monto en pesos a convertir</span>
+          <div class="money-input"><em id="dv-cur">$</em><input type="number" id="dv-amount" placeholder="0" step="1000"></div></label>
+        <label class="field"><span>Fecha de la operación</span>
+          <input type="date" id="dv-date" value="${new Date().toISOString().slice(0,10)}"></label>
+        <button class="btn-primary" id="dv-confirm" style="margin-top:8px">Registrar operación</button>
+      </aside>
+      <div class="inv-result">
+        <div id="dv-preview" class="card" style="padding:22px"></div>
+      </div>
+    </div>`;
+
+  const st = { op: "comprar", calc: null };
+
+  const updatePreview = () => {
+    const tcKey = $("#dv-tc").value;
+    const rate = tc[tcKey] || 0;
+    const amount = parseFloat($("#dv-amount").value) || 0;
+    const op = st.op;
+    $("#dv-cur").textContent = op === "comprar" ? "$" : "US$";
+    $("#dv-amount-label").textContent = op === "comprar" ? "Monto en pesos a convertir" : "Monto en dólares a vender";
+    let out;
+    if (op === "comprar") {
+      const usd = rate ? amount / rate : 0;
+      out = `<div class="dv-calc">
+        <div class="dv-row"><span>Pagás</span><b>${moneyC(amount,"ARS")}</b></div>
+        <div class="dv-row"><span>Tipo de cambio (${tcKey.toUpperCase()})</span><b>$${num2(rate)}</b></div>
+        <div class="dv-row big"><span>Recibís</span><b class="in">${moneyC(usd,"USD")}</b></div>
+      </div>`;
+      st.calc = { fromCcy: "ARS", toCcy: "USD", fromAmt: amount, toAmt: usd, rate };
+    } else {
+      const ars = amount * rate;
+      out = `<div class="dv-calc">
+        <div class="dv-row"><span>Vendés</span><b>${moneyC(amount,"USD")}</b></div>
+        <div class="dv-row"><span>Tipo de cambio (${tcKey.toUpperCase()})</span><b>$${num2(rate)}</b></div>
+        <div class="dv-row big"><span>Recibís</span><b class="in">${moneyC(ars,"ARS")}</b></div>
+      </div>`;
+      st.calc = { fromCcy: "USD", toCcy: "ARS", fromAmt: amount, toAmt: ars, rate };
+    }
+    $("#dv-preview").innerHTML = `<h3 style="font-family:Fraunces,serif;font-size:16px;margin-bottom:14px">Resumen de la operación</h3>${out}
+      <p class="modal-note" style="margin-top:14px">Se registran dos movimientos: uno que sale de la cuenta de origen y otro que entra en la de destino, ambos en la fecha elegida.</p>`;
+  };
+
+  $$("#dv-op .seg").forEach(b => b.onclick = () => {
+    $$("#dv-op .seg").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    st.op = b.dataset.op;
+    updatePreview();
+  });
+  $("#dv-tc").onchange = updatePreview;
+  $("#dv-amount").oninput = updatePreview;
+
+  $("#dv-confirm").onclick = () => {
+    const c = st.calc;
+    if (!c || !c.fromAmt) { alert("Ingresá un monto."); return; }
+    const arsAcc = $("#dv-ars").value, usdAcc = $("#dv-usd").value;
+    const date = $("#dv-date").value;
+    const tcKey = $("#dv-tc").value.toUpperCase();
+    const fromAcc = c.fromCcy === "ARS" ? arsAcc : usdAcc;
+    const toAcc = c.toCcy === "ARS" ? arsAcc : usdAcc;
+    state.movements.push({ label: `Cambio ${c.fromCcy}→${c.toCcy} (${tcKey})`, amount: -Math.abs(c.fromAmt), date, recurrence: "none", medio: "transferencia", account: fromAcc });
+    state.movements.push({ label: `Cambio ${c.fromCcy}→${c.toCcy} (${tcKey})`, amount: Math.abs(c.toAmt), date, recurrence: "none", medio: "transferencia", account: toAcc });
+    project();
+    alert("Operación registrada. Vas a verla en el flujo de ambas monedas.");
+    $("#dv-amount").value = "";
+    updatePreview();
+  };
+
+  updatePreview();
 }
 
 // ── Inversiones ──────────────────────────────────────────
@@ -1602,6 +1987,145 @@ function renderConcResult(r, extractoCount) {
     ], "good")}`;
 }
 
+// ── Configuración ────────────────────────────────────────
+function renderConfig() {
+  const wrap = $("#config-wrap");
+  const bancoOptions = (sel) => BANCOS_AR.map((b) => `<option value="${h(b)}" ${b === sel ? "selected" : ""}>${h(b)}</option>`).join("");
+
+  wrap.innerHTML = `
+    <div class="mkt-head"><div class="eyebrow">Configuración</div>
+      <h2 class="inv-title">Ajustes de la aplicación</h2>
+      <p class="inv-sub">Configurá tus cuentas, los datos de la empresa y las preferencias antes de empezar a usar Calce.</p></div>
+
+    <div class="cfg-section card">
+      <div class="cfg-sec-head">
+        <h3>Cuentas</h3>
+        <button class="btn-primary sm" id="cfg-add-account">+ Agregar cuenta</button>
+      </div>
+      <p class="cfg-hint">Tus cuentas bancarias y la caja de efectivo. El efectivo y las billeteras se distinguen después en el <b>medio de pago</b> de cada movimiento.</p>
+      <div id="cfg-accounts"></div>
+    </div>
+
+    <div class="cfg-section card">
+      <h3>Empresa</h3>
+      <div class="cfg-grid">
+        <label class="field"><span>Nombre / Razón social</span>
+          <input type="text" id="cfg-emp-nombre" value="${h(state.empresa.nombre)}" placeholder="Mi Empresa S.A."></label>
+        <label class="field"><span>CUIT</span>
+          <input type="text" id="cfg-emp-cuit" value="${h(state.empresa.cuit)}" placeholder="30-12345678-9"></label>
+        <label class="field"><span>Provincia</span>
+          <select id="cfg-emp-prov">${["","CABA","Buenos Aires","Córdoba","Santa Fe","Mendoza","Tucumán","Entre Ríos","Salta","Otra"].map(p=>`<option ${p===state.empresa.provincia?"selected":""}>${p||"Elegir…"}</option>`).join("")}</select></label>
+      </div>
+    </div>
+
+    <div class="cfg-section card">
+      <h3>Parámetros impositivos</h3>
+      <p class="cfg-hint">Alícuotas de referencia para la proyección impositiva. Validalas con tu contador según tu actividad y provincia.</p>
+      <div class="cfg-grid">
+        <label class="field"><span>IVA (%)</span>
+          <input type="number" id="cfg-iva" value="${state.impuestos.iva}" step="0.5"></label>
+        <label class="field"><span>Ingresos Brutos (%)</span>
+          <input type="number" id="cfg-iibb" value="${state.impuestos.iibb}" step="0.1"></label>
+      </div>
+    </div>
+
+    <div class="cfg-section card">
+      <h3>Preferencias</h3>
+      <div class="cfg-grid">
+        <label class="field"><span>Moneda de visualización</span>
+          <select id="cfg-moneda">
+            <option value="ARS" ${state.prefs.moneda==="ARS"?"selected":""}>Pesos (ARS)</option>
+            <option value="USD" ${state.prefs.moneda==="USD"?"selected":""}>Dólares (USD)</option>
+          </select></label>
+        <label class="field"><span>Formato de fecha</span>
+          <select id="cfg-fecha">
+            <option value="dd/mm/aa" ${state.prefs.formatoFecha==="dd/mm/aa"?"selected":""}>dd/mm/aa</option>
+            <option value="dd/mm/aaaa" ${state.prefs.formatoFecha==="dd/mm/aaaa"?"selected":""}>dd/mm/aaaa</option>
+          </select></label>
+        <label class="field"><span>Colchón mínimo por defecto</span>
+          <div class="money-input"><em>$</em><input type="number" id="cfg-colchon" value="${state.prefs.colchon}" step="10000"></div></label>
+        <label class="field"><span>Horizonte por defecto</span>
+          <select id="cfg-horizonte">
+            ${[30,60,90,180,365].map(d=>`<option value="${d}" ${state.prefs.horizonte===d?"selected":""}>${d} días</option>`).join("")}</select></label>
+      </div>
+    </div>`;
+
+  const renderCfgAccounts = () => {
+    $("#cfg-accounts").innerHTML = state.accounts.map((a) => `
+      <div class="cfg-account" data-id="${a.id}">
+        <div class="cfg-acc-grid">
+          <label class="field"><span>Nombre</span>
+            <input type="text" class="ca-name" value="${h(a.name)}" placeholder="Ej: Cuenta operativa"></label>
+          <label class="field"><span>Tipo</span>
+            <select class="ca-tipo">
+              <option value="ca" ${a.tipo==="ca"?"selected":""}>Caja de ahorro</option>
+              <option value="cc" ${a.tipo==="cc"?"selected":""}>Cuenta corriente</option>
+              <option value="efectivo" ${a.tipo==="efectivo"?"selected":""}>Efectivo / Caja</option>
+            </select></label>
+          <label class="field ca-banco-field" ${a.tipo==="efectivo"?'style="display:none"':''}><span>Banco</span>
+            <select class="ca-banco">${bancoOptions(a.banco)}</select></label>
+          <label class="field"><span>Moneda</span>
+            <select class="ca-moneda">
+              <option value="ARS" ${a.moneda==="ARS"?"selected":""}>Pesos (ARS)</option>
+              <option value="USD" ${a.moneda==="USD"?"selected":""}>Dólares (USD)</option>
+            </select></label>
+          <label class="field ca-alias-field" ${a.tipo==="efectivo"?'style="display:none"':''}><span>N° cuenta / alias (opcional)</span>
+            <input type="text" class="ca-alias" value="${h(a.alias||"")}" placeholder="mi.alias.mp"></label>
+          <label class="field"><span>Saldo inicial</span>
+            <div class="money-input"><em>$</em><input type="number" class="ca-opening" value="${a.opening}" step="1000"></div></label>
+        </div>
+        <button class="cfg-acc-del" title="Eliminar">Eliminar cuenta</button>
+      </div>`).join("");
+
+    $$(".cfg-account").forEach((row) => {
+      const id = row.dataset.id;
+      const acc = state.accounts.find((a) => a.id === id);
+      row.querySelector(".ca-name").oninput = (e) => { acc.name = e.target.value; saveState(); };
+      row.querySelector(".ca-banco").onchange = (e) => { acc.banco = e.target.value; saveState(); };
+      row.querySelector(".ca-moneda").onchange = (e) => { acc.moneda = e.target.value; renderAccounts(); syncAccountSelectors(); project(); };
+      row.querySelector(".ca-alias").oninput = (e) => { acc.alias = e.target.value; saveState(); };
+      row.querySelector(".ca-opening").oninput = (e) => { acc.opening = parseFloat(e.target.value) || 0; project(); };
+      row.querySelector(".ca-tipo").onchange = (e) => {
+        acc.tipo = e.target.value;
+        const isEf = acc.tipo === "efectivo";
+        row.querySelector(".ca-banco-field").style.display = isEf ? "none" : "";
+        row.querySelector(".ca-alias-field").style.display = isEf ? "none" : "";
+      };
+      row.querySelector(".cfg-acc-del").onclick = () => {
+        if (state.accounts.length <= 1) { alert("Tenés que tener al menos una cuenta."); return; }
+        state.accounts = state.accounts.filter((a) => a.id !== id);
+        const fallback = state.accounts[0].id;
+        state.movements.forEach((m) => { if (m.account === id) m.account = fallback; });
+        renderCfgAccounts();
+        renderAccounts(); syncAccountSelectors(); project();
+      };
+    });
+  };
+  renderCfgAccounts();
+
+  $("#cfg-add-account").onclick = () => {
+    state.accounts.push({ id: newAccountId(), name: "Nueva cuenta", banco: BANCOS_AR[0], tipo: "ca", moneda: "ARS", alias: "", opening: 0 });
+    renderCfgAccounts();
+    renderAccounts(); syncAccountSelectors();
+  };
+
+  $("#cfg-emp-nombre").oninput = (e) => { state.empresa.nombre = e.target.value; saveState(); };
+  $("#cfg-emp-cuit").oninput = (e) => { state.empresa.cuit = e.target.value; saveState(); };
+  $("#cfg-emp-prov").onchange = (e) => { state.empresa.provincia = e.target.value; saveState(); };
+  $("#cfg-iva").oninput = (e) => { state.impuestos.iva = parseFloat(e.target.value) || 0; saveState(); };
+  $("#cfg-iibb").oninput = (e) => { state.impuestos.iibb = parseFloat(e.target.value) || 0; saveState(); };
+  $("#cfg-moneda").onchange = (e) => { state.prefs.moneda = e.target.value; saveState(); };
+  $("#cfg-fecha").onchange = (e) => { state.prefs.formatoFecha = e.target.value; saveState(); };
+  $("#cfg-colchon").oninput = (e) => {
+    state.prefs.colchon = parseFloat(e.target.value) || 0;
+    if ($("#buffer")) $("#buffer").value = state.prefs.colchon;
+  };
+  $("#cfg-horizonte").onchange = (e) => {
+    state.prefs.horizonte = parseInt(e.target.value, 10);
+    if ($("#horizon")) { $("#horizon").value = state.prefs.horizonte; project(); }
+  };
+}
+
 // ── Navegación ───────────────────────────────────────────
 const INV_GROUP = ["inversiones", "excedente", "fci", "mercado"];
 function switchView(view) {
@@ -1616,23 +2140,35 @@ function switchView(view) {
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${view}`).classList.remove("hidden");
   if (view === "inversiones") renderInversiones();
+  if (view === "divisas") renderDivisas();
   if (view === "mercado") renderMercado();
   if (view === "fci") renderFCI();
   if (view === "impuestos") renderImpuestos();
   if (view === "conciliacion") renderConciliacion();
+  if (view === "config") renderConfig();
 }
 
 // ── Init ─────────────────────────────────────────────────
 function init() {
-  // Movimientos de ejemplo (una PyME típica)
-  const demo = [
-    { label: "Cobranzas de clientes", value: 500000, date: monthDay(25), recurrence: "monthly", account: "banco", medio: "transferencia" },
-    { label: "Sueldos", value: -350000, date: monthDay(28), recurrence: "monthly", account: "banco", medio: "transferencia" },
-    { label: "Alquiler", value: -120000, date: monthDay(10), recurrence: "monthly", account: "banco", medio: "transferencia" },
-    { label: "Ventas mostrador", value: 180000, date: addDays(3), recurrence: "weekly", account: "efectivo", medio: "efectivo" },
-    { label: "Pago a proveedor", value: -80000, date: addDays(15), recurrence: "none", account: "efectivo", medio: "efectivo" },
-  ];
-  demo.forEach(addMovement);
+  // ¿Demo específico por URL? (?demo=constructora) — pisa lo guardado
+  const demoParam = new URLSearchParams(location.search).get("demo");
+  if (demoParam === "constructora" && typeof DEMO_CONSTRUCTORA !== "undefined") {
+    loadDemoDataset(DEMO_CONSTRUCTORA);
+  } else if (loadState()) {
+    // Estado restaurado desde el navegador: aplicar prefs al panel
+    if ($("#buffer")) $("#buffer").value = state.prefs.colchon;
+    if ($("#horizon")) $("#horizon").value = state.prefs.horizonte;
+  } else {
+    // Primera vez: movimientos de ejemplo (una PyME típica)
+    const demo = [
+      { label: "Cobranzas de clientes", value: 500000, date: monthDay(25), recurrence: "monthly", account: "banco", medio: "transferencia" },
+      { label: "Sueldos", value: -350000, date: monthDay(28), recurrence: "monthly", account: "banco", medio: "transferencia" },
+      { label: "Alquiler", value: -120000, date: monthDay(10), recurrence: "monthly", account: "banco", medio: "transferencia" },
+      { label: "Ventas mostrador", value: 180000, date: addDays(3), recurrence: "weekly", account: "efectivo", medio: "efectivo" },
+      { label: "Pago a proveedor", value: -80000, date: addDays(15), recurrence: "none", account: "efectivo", medio: "efectivo" },
+    ];
+    demo.forEach(addMovement);
+  }
 
   $("#add-mov").addEventListener("click", () => openMovModal());
 
@@ -1643,6 +2179,14 @@ function init() {
     if (e.target.id === "mov-modal") closeMovModal();
   });
   $("#mov-modal-save").addEventListener("click", saveMovFromModal);
+  // Tabs de modalidad (simple/cheque/cuotas)
+  $$(".mov-mode").forEach((b) => b.addEventListener("click", () => setMovMode(b.dataset.mode)));
+  $("#m-add-cuota").addEventListener("click", () => {
+    state._cuotas = state._cuotas || [];
+    state._cuotas.push({ date: "", amount: "" });
+    renderCuotas();
+  });
+  $("#m-account").addEventListener("change", () => { updateModalCurrency(); renderCuotas(); });
 
   // Importar desde Excel/CSV
   $("#import-mov").addEventListener("click", () => $("#import-file").click());
@@ -1661,15 +2205,21 @@ function init() {
         alert(data.error || "No se pudo importar el archivo.");
         return;
       }
-      // Reemplazar los movimientos actuales por los importados
-      state.movements = [];
+      // ¿Reemplazar o agregar a lo existente?
+      let replace = true;
+      if (state.movements.length > 0) {
+        replace = confirm(`Ya tenés ${state.movements.length} movimientos cargados.\n\nAceptar = reemplazar todo por lo importado.\nCancelar = agregar los importados a los que ya tenés.`);
+      }
+      if (replace) state.movements = [];
       data.movements.forEach((m) => addMovement({
         label: m.label,
         value: m.amount,
         date: m.date,
         recurrence: m.recurrence || "none",
         medio: m.medio,
+        account: resolveAccountText(m.account_text),
       }));
+      renderAccounts(); syncAccountSelectors();
       project();
       const skipped = data.skipped ? ` (${data.skipped} filas sin datos válidos se omitieron)` : "";
       alert(`Se importaron ${data.count} movimientos${skipped}.`);
@@ -1686,7 +2236,6 @@ function init() {
   // Cuentas
   renderAccounts();
   syncAccountSelectors();
-  $("#add-account").addEventListener("click", addAccount);
   $("#cf-account-filter").addEventListener("change", (e) => {
     state.cfAccount = e.target.value;
     project();

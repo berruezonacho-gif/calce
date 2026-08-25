@@ -696,9 +696,9 @@ input:focus, select:focus {
 .accounts-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
 .account-row { display: grid; grid-template-columns: 1fr 118px auto; gap: 6px; align-items: center; }
 .account-row .acc-name { font-family: "Inter", sans-serif; font-size: 13px; padding: 8px 10px; }
-.money-input.sm { display: flex; align-items: center; }
-.money-input.sm em { font-size: 12px; }
-.money-input.sm input { font-family: var(--mono); font-size: 12.5px; padding: 8px; }
+.money-input.sm { position: relative; display: flex; align-items: center; }
+.money-input.sm em { font-size: 11px; left: 9px; }
+.money-input.sm input { font-family: var(--mono); font-size: 12.5px; padding: 8px 8px 8px 20px; }
 .acc-del {
   width: 22px; height: 22px; border-radius: 50%; background: #fff;
   border: 1px solid var(--line); color: var(--slate-2); font-size: 14px;
@@ -730,3 +730,97 @@ input:focus, select:focus {
 .acct-balance.total.active { border-style: solid; }
 
 .cf-account-filter { font-family: "Inter", sans-serif; font-size: 12.5px; padding: 7px 10px; }
+
+/* ── Panel de cuentas (flujo) rediseñado ─────────────────── */
+.account-row { display: grid; grid-template-columns: 1fr 118px; gap: 8px; align-items: center; }
+.acc-info b { font-size: 13px; display: block; }
+.acc-info small { font-size: 11px; color: var(--slate-2); }
+.acc-config-link {
+  width: 100%; margin-top: 10px; background: none; border: 1px dashed var(--line);
+  color: var(--accent); font-family: inherit; font-size: 12.5px; padding: 8px;
+  border-radius: 8px; cursor: pointer; transition: .12s;
+}
+.acc-config-link:hover { border-color: var(--accent); background: var(--accent-bg); }
+
+/* ── Sección de Configuración ────────────────────────────── */
+.config-wrap { max-width: 900px; }
+.cfg-section { padding: 22px 24px; margin-bottom: 18px; }
+.cfg-section h3 { font-family: "Fraunces", serif; font-size: 17px; margin-bottom: 4px; }
+.cfg-sec-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.cfg-hint { font-size: 12.5px; color: var(--slate); line-height: 1.55; margin-bottom: 16px; }
+.cfg-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+.btn-primary.sm { width: auto; margin: 0; padding: 8px 16px; font-size: 13px; }
+
+.cfg-account {
+  border: 1px solid var(--line); border-radius: 12px; padding: 16px;
+  margin-bottom: 12px; background: var(--paper);
+}
+.cfg-acc-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.cfg-acc-del {
+  margin-top: 12px; background: none; border: none; color: var(--red);
+  font-family: inherit; font-size: 12.5px; cursor: pointer; padding: 4px 0;
+}
+.cfg-acc-del:hover { text-decoration: underline; }
+
+.nav-config { margin-left: auto; }
+
+@media (max-width: 720px) {
+  .cfg-grid, .cfg-acc-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Selector de moneda del flujo ────────────────────────── */
+.currency-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+.ccy-tab {
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 18px; font-family: inherit; font-size: 13.5px; font-weight: 600;
+  color: var(--slate); cursor: pointer; transition: .14s;
+}
+.ccy-tab:hover { border-color: var(--accent); }
+.ccy-tab.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+/* ── Modal: tabs de modalidad ────────────────────────────── */
+.mov-mode-tabs { display: flex; gap: 6px; margin-bottom: 18px; background: var(--paper); padding: 4px; border-radius: 10px; }
+.mov-mode {
+  flex: 1; background: none; border: none; padding: 8px; border-radius: 7px;
+  font-family: inherit; font-size: 13px; font-weight: 500; color: var(--slate);
+  cursor: pointer; transition: .12s;
+}
+.mov-mode:hover { color: var(--ink); }
+.mov-mode.active { background: #fff; color: var(--navy); font-weight: 600; box-shadow: var(--shadow); }
+.modal-note { font-size: 12px; color: var(--slate-2); margin-top: 6px; line-height: 1.5; }
+
+/* ── Modal: cuotas ───────────────────────────────────────── */
+.cuotas-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.cuotas-head span { font-size: 12.5px; font-weight: 600; color: var(--slate); }
+.cuota-row { display: grid; grid-template-columns: 1fr 130px auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+.cuota-del {
+  width: 24px; height: 24px; border-radius: 50%; background: #fff; border: 1px solid var(--line);
+  color: var(--slate-2); font-size: 15px; cursor: pointer;
+}
+.cuota-del:hover { color: var(--red); border-color: var(--red); }
+
+/* ── Indicador de guardado ───────────────────────────────── */
+.save-indicator {
+  position: fixed; bottom: 20px; right: 20px; background: var(--navy); color: #fff;
+  padding: 8px 16px; border-radius: 20px; font-size: 12.5px; font-family: "Inter", sans-serif;
+  opacity: 0; transform: translateY(8px); transition: .2s; pointer-events: none; z-index: 500;
+}
+.save-indicator.show { opacity: 1; transform: translateY(0); }
+
+/* ── Divisas (comprar/vender USD) ────────────────────────── */
+.seg-toggle { display: flex; gap: 6px; background: var(--paper); padding: 4px; border-radius: 10px; margin-bottom: 14px; }
+.seg-toggle .seg {
+  flex: 1; background: none; border: none; padding: 9px; border-radius: 7px;
+  font-family: inherit; font-size: 13px; font-weight: 500; color: var(--slate); cursor: pointer; transition: .12s;
+}
+.seg-toggle .seg:hover { color: var(--ink); }
+.seg-toggle .seg.active { background: #fff; color: var(--navy); font-weight: 600; box-shadow: var(--shadow); }
+.dv-calc { display: flex; flex-direction: column; gap: 12px; }
+.dv-row { display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; border-bottom: 1px solid var(--line-2); }
+.dv-row:last-child { border-bottom: none; }
+.dv-row span { color: var(--slate); font-size: 13.5px; }
+.dv-row b { font-family: var(--mono); font-size: 15px; }
+.dv-row.big { padding-top: 4px; }
+.dv-row.big span { font-weight: 600; color: var(--ink); }
+.dv-row.big b { font-family: "Fraunces", serif; font-size: 22px; }
+.divisas-loading { padding: 40px; text-align: center; color: var(--slate-2); }

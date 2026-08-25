@@ -26,12 +26,14 @@
         <div class="nav-menu">
           <button class="nav-sub" data-view="inversiones">Simulador</button>
           <button class="nav-sub" data-view="excedente">Excedente</button>
+          <button class="nav-sub" data-view="divisas">Dólar (comprar/vender)</button>
           <button class="nav-sub" data-view="fci">FCI</button>
           <button class="nav-sub" data-view="mercado">Bonos</button>
         </div>
       </div>
       <button class="nav-item" data-view="impuestos">Impuestos</button>
       <button class="nav-item" data-view="conciliacion">Conciliación</button>
+      <button class="nav-item nav-config" data-view="config" title="Configuración">⚙ Configuración</button>
     </nav>
   </header>
 
@@ -45,7 +47,6 @@
           <div class="ctrl-card">
             <div class="ctrl-head">
               <h2>Cuentas</h2>
-              <button class="add-btn" id="add-account">+ Cuenta</button>
             </div>
             <div class="accounts-list" id="accounts-list"></div>
             <div class="accounts-total" id="accounts-total"></div>
@@ -85,6 +86,7 @@
         <!-- Resultado principal -->
         <div class="result">
           <div class="kpi-row" id="kpi-row"></div>
+          <div class="currency-tabs" id="currency-tabs"></div>
           <div class="account-balances" id="account-balances"></div>
           <div class="table-card">
             <div class="chart-head">
@@ -128,6 +130,11 @@
       <div class="inv-wrap" id="inv-wrap"></div>
     </section>
 
+    <!-- Vista Dólar: comprar / vender divisas -->
+    <section class="view hidden" id="view-divisas">
+      <div class="divisas-wrap" id="divisas-wrap"></div>
+    </section>
+
     <!-- Vista Mercado de bonos (tableros con métricas y curvas) -->
     <section class="view hidden" id="view-mercado">
       <div class="mkt-wrap" id="mkt-wrap"></div>
@@ -146,6 +153,11 @@
     <!-- Vista Conciliación bancaria -->
     <section class="view hidden" id="view-conciliacion">
       <div class="conc-wrap" id="conc-wrap"></div>
+    </section>
+
+    <!-- Vista Configuración -->
+    <section class="view hidden" id="view-config">
+      <div class="config-wrap" id="config-wrap"></div>
     </section>
   </main>
 
@@ -186,6 +198,12 @@
         <button class="modal-close" id="mov-modal-close">×</button>
       </div>
       <div class="modal-body">
+        <div class="mov-mode-tabs">
+          <button class="mov-mode active" data-mode="simple">Simple</button>
+          <button class="mov-mode" data-mode="cheque">Cheque</button>
+          <button class="mov-mode" data-mode="cuotas">En cuotas</button>
+        </div>
+
         <label class="field"><span>Concepto</span>
           <input type="text" id="m-label" placeholder="Ej: Cobranza cliente">
         </label>
@@ -196,11 +214,13 @@
               <option value="-1">Sale (gasto)</option>
             </select>
           </label>
-          <label class="field"><span>Monto</span>
-            <div class="money-input"><em>$</em><input type="number" id="m-value" placeholder="0" step="1000"></div>
+          <label class="field"><span id="m-value-label">Monto</span>
+            <div class="money-input"><em id="m-cur">$</em><input type="number" id="m-value" placeholder="0" step="1000"></div>
           </label>
         </div>
-        <div class="modal-row">
+
+        <!-- Fila fecha + repetición (modo simple) -->
+        <div class="modal-row" id="m-simple-row">
           <label class="field"><span>Fecha</span>
             <input type="date" id="m-date">
           </label>
@@ -208,10 +228,36 @@
             <select id="m-rec">
               <option value="none">Una vez</option>
               <option value="weekly">Semanal</option>
+              <option value="quincenal">Quincenal</option>
               <option value="monthly">Mensual</option>
+              <option value="quarterly">Trimestral</option>
             </select>
           </label>
         </div>
+
+        <!-- Cheque: fecha de emisión + vencimiento -->
+        <div id="m-cheque-block" style="display:none">
+          <div class="modal-row">
+            <label class="field"><span>Fecha de emisión</span>
+              <input type="date" id="m-emision">
+            </label>
+            <label class="field"><span>Fecha de vencimiento (cobro/pago)</span>
+              <input type="date" id="m-venc">
+            </label>
+          </div>
+          <p class="modal-note">El cheque impacta la caja en la fecha de vencimiento.</p>
+        </div>
+
+        <!-- Cuotas: lista de fechas + montos -->
+        <div id="m-cuotas-block" style="display:none">
+          <div class="cuotas-head">
+            <span>Cuotas</span>
+            <button type="button" class="cf-link" id="m-add-cuota">+ Agregar cuota</button>
+          </div>
+          <div id="m-cuotas-list"></div>
+          <p class="modal-note" id="m-cuotas-total"></p>
+        </div>
+
         <label class="field"><span>Medio de cobro / pago</span>
           <select id="m-medio">
             <option value="transferencia">Transferencia</option>
@@ -231,6 +277,10 @@
     </div>
   </div>
 
+  <div class="save-indicator" id="save-indicator">✓ Guardado</div>
+
+  <script src="/static/bancos.js?v=1"></script>
+  <script src="/static/demo_constructora.js?v=1"></script>
   <script src="/static/app.js?v=1"></script>
 </body>
 </html>

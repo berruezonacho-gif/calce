@@ -27,6 +27,8 @@ _AMOUNT_COLS = {"monto", "importe", "amount", "valor", "total", "neto"}
 _IN_COLS = {"entrada", "entradas", "ingreso", "ingresos", "credito", "credito", "haber", "cobros", "cobranza", "cobranzas"}
 _OUT_COLS = {"salida", "salidas", "egreso", "egresos", "debito", "debito", "debe", "pagos", "pago"}
 _REC_COLS = {"recurrencia", "recurrence", "repeticion", "frecuencia", "periodicidad"}
+_ACCOUNT_COLS = {"cuenta", "account", "banco", "caja", "cuenta bancaria"}
+_MEDIO_COLS = {"medio", "medio de pago", "medio de cobro", "forma de pago", "instrumento", "metodo"}
 
 
 def _norm(s: str) -> str:
@@ -134,6 +136,7 @@ def parse_movements(content: bytes, filename: str = "") -> dict:
 
     # Mapear columnas
     col_date = col_label = col_amount = col_in = col_out = col_rec = None
+    col_account = col_medio = None
     for i, h in enumerate(headers):
         if col_date is None and h in _DATE_COLS: col_date = i
         if col_label is None and h in _LABEL_COLS: col_label = i
@@ -141,6 +144,8 @@ def parse_movements(content: bytes, filename: str = "") -> dict:
         if col_in is None and h in _IN_COLS: col_in = i
         if col_out is None and h in _OUT_COLS: col_out = i
         if col_rec is None and h in _REC_COLS: col_rec = i
+        if col_account is None and h in _ACCOUNT_COLS: col_account = i
+        if col_medio is None and h in _MEDIO_COLS: col_medio = i
 
     if col_date is None:
         return {"ok": False, "error": "No se encontró una columna de fecha. Asegurate de que tenga un encabezado como 'Fecha'.", "movements": []}
@@ -173,13 +178,28 @@ def parse_movements(content: bytes, filename: str = "") -> dict:
         if col_rec is not None and col_rec < len(row) and row[col_rec]:
             rv = _norm(str(row[col_rec]))
             if rv in ("weekly", "semanal", "semana"): rec = "weekly"
+            elif rv in ("quincenal", "quincena", "biweekly"): rec = "quincenal"
             elif rv in ("monthly", "mensual", "mes"): rec = "monthly"
+            elif rv in ("quarterly", "trimestral", "trimestre"): rec = "quarterly"
             elif rv in ("daily", "diario", "dia"): rec = "daily"
+        # Texto de cuenta y medio (el frontend los resuelve contra sus cuentas)
+        account_text = ""
+        if col_account is not None and col_account < len(row) and row[col_account]:
+            account_text = str(row[col_account]).strip()
+        medio = ""
+        if col_medio is not None and col_medio < len(row) and row[col_medio]:
+            mv = _norm(str(row[col_medio]))
+            if "transfer" in mv: medio = "transferencia"
+            elif "efectivo" in mv or "cash" in mv: medio = "efectivo"
+            elif "cheque" in mv or "echeq" in mv: medio = "cheque"
+            elif "tarjeta" in mv or "card" in mv: medio = "tarjeta"
         movements.append({
             "date": d,
             "amount": amount,
             "label": label,
             "recurrence": rec,
+            "account_text": account_text,
+            "medio": medio,
         })
 
     return {
