@@ -84,5 +84,16 @@ const DEMO_CONSTRUCTORA = {
     { label: "Cuota leasing camioneta", amount: -780000, date: "d+15", recurrence: "monthly", medio: "transferencia", account: "bna-cc" },
     // Descuento de cheques / adelanto (devolución)
     { label: "Cancelación adelanto cuenta corriente", amount: -3000000, date: "d+30", recurrence: "none", medio: "transferencia", account: "bna-cc" },
+
+    // ── INVERSIONES YA HECHAS (para ver qué problemas traen) ─
+    // El tesorero ya colocó excedente. Estas son las que hay que poder rastrear.
+    // Plazo fijo colocado hace poco: sale la plata ahora, vuelve con interés al vencimiento
+    { label: "Constitución plazo fijo 30d", amount: -10000000, date: "d-5", recurrence: "none", medio: "transferencia", account: "bna-cc" },
+    { label: "Vencimiento plazo fijo + interés", amount: 10350000, date: "d+25", recurrence: "none", medio: "transferencia", account: "bna-cc" },
+    // Suscripción a FCI money market (rescatable, pero acá cargado como salida puntual)
+    { label: "Suscripción FCI money market", amount: -8000000, date: "d-2", recurrence: "none", medio: "transferencia", account: "bna-cc" },
+    // Compra de dólares con excedente (queda en la cuenta USD)
+    { label: "Compra USD con excedente", amount: -6000000, date: "d-10", recurrence: "none", medio: "transferencia", account: "bna-cc" },
+    { label: "Ingreso por compra USD", amount: 4900, date: "d-10", recurrence: "none", medio: "transferencia", account: "usd-ca" },
   ],
 };

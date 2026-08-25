@@ -27,6 +27,9 @@ const state = {
   result: null,
   cfAccount: "",
   cfCurrency: "ARS", // moneda activa del flujo (ARS / USD)
+  cfFrom: null, // rango de fechas de la tabla (ISO) — null = default (mes)
+  cfTo: null,
+  cfRange: "mes", // botón rápido activo
 };
 
 const TIPOS_CUENTA = [
@@ -276,11 +279,11 @@ function loadDemoDataset(ds) {
   // Aplicar prefs al panel
   if ($("#buffer")) $("#buffer").value = state.prefs.colchon;
   if ($("#horizon")) $("#horizon").value = state.prefs.horizonte;
-  // Movimientos: traducir fechas relativas "d+N" a ISO
+  // Movimientos: traducir fechas relativas "d+N" o "d-N" a ISO
   state.movements = [];
   (ds.movements || []).forEach((m) => {
     let date = m.date;
-    const rel = /^d\+(\d+)$/.exec(m.date || "");
+    const rel = /^d([+-]\d+)$/.exec(m.date || "");
     if (rel) date = addDays(parseInt(rel[1], 10));
     state.movements.push({
       label: m.label, amount: m.amount, date,
@@ -299,29 +302,43 @@ function totalOpening() {
 function renderAccounts() {
   const list = $("#accounts-list");
   if (!list) return;
+  const today = new Date(); today.setHours(23,59,59,999);
+  // Saldo a la fecha de hoy por cuenta (opening + movimientos hasta hoy)
+  const balToday = (a) => {
+    let bal = parseFloat(a.opening) || 0;
+    state.movements.forEach((m) => {
+      if (m.account !== a.id || !m.amount || !m.date) return;
+      const base = new Date(m.date + "T00:00:00");
+      if (m.recurrence === "none") {
+        if (base <= today) bal += m.amount;
+      } else {
+        let d = new Date(base), guard = 0;
+        while (d <= today && guard < 2000) {
+          bal += m.amount;
+          if (m.recurrence === "weekly") d.setDate(d.getDate() + 7);
+          else if (m.recurrence === "quincenal") d.setDate(d.getDate() + 14);
+          else if (m.recurrence === "monthly") d.setMonth(d.getMonth() + 1);
+          else if (m.recurrence === "quarterly") d.setMonth(d.getMonth() + 3);
+          else break;
+          guard++;
+        }
+      }
+    });
+    return bal;
+  };
   list.innerHTML = state.accounts.map((a) => `
-    <div class="account-row" data-id="${a.id}">
+    <div class="account-row ro" data-id="${a.id}">
       <div class="acc-info">
         <b>${h(a.name)}</b>
         <small>${a.tipo === "efectivo" ? "Efectivo" : (h(bancoShort(a.banco)) + " · " + tipoLabel(a.tipo))}${a.moneda === "USD" ? " · USD" : ""}</small>
       </div>
-      <div class="money-input sm"><em>$</em><input class="acc-opening" type="number" value="${a.opening}" step="1000"></div>
-    </div>`).join("") +
-    `<button class="acc-config-link" id="acc-config-link">⚙ Gestionar cuentas</button>`;
-
-  $$(".account-row").forEach((row) => {
-    const id = row.dataset.id;
-    const acc = state.accounts.find((a) => a.id === id);
-    row.querySelector(".acc-opening").oninput = (e) => { acc.opening = parseFloat(e.target.value) || 0; renderAccountsTotal(); project(); };
-  });
-  const link = $("#acc-config-link");
-  if (link) link.onclick = () => switchView("config");
+      <div class="acc-bal-today">${moneyC(balToday(a), a.moneda)}</div>
+    </div>`).join("");
   renderAccountsTotal();
 }
 
 function bancoShort(banco) {
   if (!banco) return "Sin banco";
-  // Recorta el nombre largo del banco a algo compacto
   const m = banco.match(/\(([^)]+)\)/);
   if (m) return m[1];
   return banco.replace(/^Banco (de la |de |del )?/, "").split(" ").slice(0, 2).join(" ");
@@ -334,7 +351,35 @@ function tipoLabel(tipo) {
 
 function renderAccountsTotal() {
   const el = $("#accounts-total");
-  if (el) el.innerHTML = `<span>Saldo inicial total</span><b>${money(totalOpening())}</b>`;
+  if (!el) return;
+  // Total del saldo a hoy, por moneda
+  const today = new Date(); today.setHours(23,59,59,999);
+  const balToday = (a) => {
+    let bal = parseFloat(a.opening) || 0;
+    state.movements.forEach((m) => {
+      if (m.account !== a.id || !m.amount || !m.date) return;
+      const base = new Date(m.date + "T00:00:00");
+      if (m.recurrence === "none") { if (base <= today) bal += m.amount; }
+      else {
+        let d = new Date(base), guard = 0;
+        while (d <= today && guard < 2000) {
+          bal += m.amount;
+          if (m.recurrence === "weekly") d.setDate(d.getDate() + 7);
+          else if (m.recurrence === "quincenal") d.setDate(d.getDate() + 14);
+          else if (m.recurrence === "monthly") d.setMonth(d.getMonth() + 1);
+          else if (m.recurrence === "quarterly") d.setMonth(d.getMonth() + 3);
+          else break;
+          guard++;
+        }
+      }
+    });
+    return bal;
+  };
+  const totARS = state.accounts.filter(a=>a.moneda==="ARS").reduce((s,a)=>s+balToday(a),0);
+  const totUSD = state.accounts.filter(a=>a.moneda==="USD").reduce((s,a)=>s+balToday(a),0);
+  let html = `<span>Saldo hoy</span><b>${moneyC(totARS, "ARS")}</b>`;
+  if (state.accounts.some(a=>a.moneda==="USD")) html += `<span class="tot-usd">${moneyC(totUSD, "USD")}</span>`;
+  el.innerHTML = html;
 }
 
 function addAccount() {
@@ -532,29 +577,61 @@ function renderAccountBalances() {
 
 // ── KPIs ─────────────────────────────────────────────────
 function renderKPIs() {
-  const s = state.result.summary;
-  const netClass = s.net_change >= 0 ? "pos" : "neg";
-  const minClass = s.min_balance < s.min_buffer ? "neg" : "";
+  const ccy = state.cfAccount
+    ? (state.accounts.find(a=>a.id===state.cfAccount)?.moneda || "ARS")
+    : state.cfCurrency;
+  const mc = (n) => moneyC(n, ccy);
+  const { from, to } = cfRangeDates();
+  const series = computeDaySeries(from, to);
+  const todayISO = new Date().toISOString().slice(0,10);
+
+  // Saldo hoy (de la moneda/cuenta activas)
+  const accts = state.accounts.filter(a =>
+    state.cfAccount ? a.id === state.cfAccount : a.moneda === ccy);
+  const today = new Date(); today.setHours(23,59,59,999);
+  const balToday = accts.reduce((tot, a) => {
+    let bal = parseFloat(a.opening)||0;
+    state.movements.forEach((m) => {
+      if (m.account !== a.id || !m.amount || !m.date) return;
+      const base = new Date(m.date+"T00:00:00");
+      if (m.recurrence === "none") { if (base <= today) bal += m.amount; }
+      else { let d=new Date(base),g=0; while(d<=today&&g<2000){bal+=m.amount;
+        if(m.recurrence==="weekly")d.setDate(d.getDate()+7);
+        else if(m.recurrence==="quincenal")d.setDate(d.getDate()+14);
+        else if(m.recurrence==="monthly")d.setMonth(d.getMonth()+1);
+        else if(m.recurrence==="quarterly")d.setMonth(d.getMonth()+3);
+        else break; g++;} }
+    });
+    return tot + bal;
+  }, 0);
+
+  const totalIn = series.reduce((s,d)=>s+d.inflow,0);
+  const totalOut = series.reduce((s,d)=>s+d.outflow,0);
+  const endBal = series.length ? series[series.length-1].balance : balToday;
+  const minDay = series.reduce((min,d)=> d.balance < min.balance ? d : min, series[0]||{balance:balToday,date:todayISO});
+  const minClass = minDay.balance < 0 ? "neg" : "";
+  const endClass = endBal >= 0 ? "pos" : "neg";
+
   $("#kpi-row").innerHTML = `
     <div class="kpi hero">
-      <div class="kpi-label">Excedente colocable</div>
-      <div class="kpi-value">${money(s.stable_surplus)}</div>
-      <div class="kpi-sub">Sin tocar el colchón en ${s.horizon_days} días</div>
+      <div class="kpi-label">Saldo hoy</div>
+      <div class="kpi-value">${mc(balToday)}</div>
+      <div class="kpi-sub">Disponible en ${ccy} ahora</div>
     </div>
     <div class="kpi">
-      <div class="kpi-label">Saldo hoy → fin</div>
-      <div class="kpi-value ${netClass}">${money(s.closing_balance)}</div>
-      <div class="kpi-sub">${s.net_change >= 0 ? "+" : ""}${money(s.net_change)} en el período</div>
+      <div class="kpi-label">Saldo al fin del período</div>
+      <div class="kpi-value ${endClass}">${mc(endBal)}</div>
+      <div class="kpi-sub">${fmtDateShort(from)} a ${fmtDateShort(to)}</div>
     </div>
     <div class="kpi">
-      <div class="kpi-label">Piso de caja</div>
-      <div class="kpi-value ${minClass}">${money(s.min_balance)}</div>
-      <div class="kpi-sub">El ${fmtDate(s.min_balance_date)}</div>
+      <div class="kpi-label">Piso de caja del período</div>
+      <div class="kpi-value ${minClass}">${mc(minDay.balance)}</div>
+      <div class="kpi-sub">El ${fmtDate(minDay.date)}</div>
     </div>
     <div class="kpi">
       <div class="kpi-label">Movido en el período</div>
-      <div class="kpi-value">${money(s.total_inflow)}</div>
-      <div class="kpi-sub">entra · sale ${money(s.total_outflow)}</div>
+      <div class="kpi-value">${mc(totalIn)}</div>
+      <div class="kpi-sub">entra · sale ${mc(totalOut)}</div>
     </div>`;
 }
 
@@ -565,16 +642,18 @@ function fmtDate(iso) {
 
 // ── Chart (SVG) ──────────────────────────────────────────
 function renderChart() {
-  const days = state.result.days;
-  const buffer = state.result.summary.min_buffer;
+  const { from, to } = cfRangeDates();
+  const days = computeDaySeries(from, to);
+  const buffer = 0;
   if (!days.length) return;
+  const ccy = days[0]?.ccy || state.cfCurrency;
 
   const W = 900, H = 340, P = { t: 20, r: 20, b: 34, l: 62 };
   const iw = W - P.l - P.r, ih = H - P.t - P.b;
 
   const balances = days.map((d) => d.balance);
-  let ymin = Math.min(0, ...balances, buffer);
-  let ymax = Math.max(...balances, buffer);
+  let ymin = Math.min(0, ...balances);
+  let ymax = Math.max(...balances, 0);
   const pad = (ymax - ymin) * 0.1 || 1000;
   ymin -= pad; ymax += pad;
 
@@ -672,57 +751,63 @@ function wireChartHover(days, X, Y, P, iw) {
 
 // ── Tabla estilo Excel (día / semana, con detalle) ──────
 function renderCashflowTable() {
-  const days = state.result.days;
-  if (!days.length) return;
+  const { from, to } = cfRangeDates();
+  const days = computeDaySeries(from, to);
   const grain = state.cfGrain || "dia";
-
   if (grain === "semana") return renderTableWeekly(days);
   return renderTableDaily(days);
 }
 
 function renderTableDaily(days) {
-  // Mostrar días con movimiento + permitir expandir para ver el detalle
-  const withMov = days.filter((d) => d.inflow || d.outflow);
   const movByDate = getMovementsByDate();
+  const ccy = days[0]?.ccy || state.cfCurrency;
+  const mc = (n) => moneyC(n, ccy);
+  // Mostramos todos los días del rango que tienen movimiento; si el rango es muy
+  // corto (Hoy), mostramos igual el día aunque no tenga movimiento.
+  const showAll = days.length <= 2;
+  const visible = showAll ? days : days.filter((d) => d.inflow || d.outflow);
 
-  const rows = withMov.map((d) => {
+  const rows = visible.map((d) => {
     const detail = movByDate[d.date] || [];
     const open = state.cfOpenDay === d.date;
-    const alert = d.negative ? "row-neg" : d.below_buffer ? "row-warn" : "";
-    const main = `<tr class="cf-row ${alert}" data-day="${d.date}">
+    const isToday = d.date === new Date().toISOString().slice(0,10);
+    const alert = d.negative ? "row-neg" : "";
+    const main = `<tr class="cf-row ${alert} ${isToday ? "cf-today" : ""}" data-day="${d.date}">
       <td class="cf-caret">${detail.length ? (open ? "▾" : "▸") : ""}</td>
-      <td class="cf-date">${fmtDateFull(d.date)}</td>
-      <td class="${d.inflow ? "in" : "muted"}">${d.inflow ? "+" + money(d.inflow) : "—"}</td>
-      <td class="${d.outflow ? "out" : "muted"}">${d.outflow ? "−" + money(d.outflow) : "—"}</td>
-      <td class="${d.net > 0 ? "in" : d.net < 0 ? "out" : "muted"}">${d.net ? (d.net > 0 ? "+" : "") + money(d.net) : "—"}</td>
-      <td class="bal ${d.negative ? "neg" : d.below_buffer ? "warn" : ""}">${money(d.balance)}</td>
-      <td class="${d.investable ? "inv" : "muted"}">${d.investable ? money(d.investable) : "—"}</td>
+      <td class="cf-date">${fmtDateFull(d.date)}${isToday ? ' <span class="today-tag">hoy</span>' : ''}</td>
+      <td class="${d.inflow ? "in" : "muted"}">${d.inflow ? "+" + mc(d.inflow) : "—"}</td>
+      <td class="${d.outflow ? "out" : "muted"}">${d.outflow ? "−" + mc(d.outflow) : "—"}</td>
+      <td class="${d.net > 0 ? "in" : d.net < 0 ? "out" : "muted"}">${d.net ? (d.net > 0 ? "+" : "") + mc(d.net) : "—"}</td>
+      <td class="bal ${d.negative ? "neg" : ""}">${mc(d.balance)}</td>
     </tr>`;
     let detailRows = "";
     if (open && detail.length) {
       detailRows = detail.map((m) => `<tr class="cf-detail cf-mov-edit" data-idx="${m._idx}" title="Tocá para editar o eliminar">
         <td></td>
         <td class="cf-detail-label" colspan="1">${h(m.label || "(sin concepto)")} <span class="cf-edit-hint">editar</span></td>
-        <td class="${m.amount > 0 ? "in" : "muted"}">${m.amount > 0 ? "+" + money(m.amount) : "—"}</td>
-        <td class="${m.amount < 0 ? "out" : "muted"}">${m.amount < 0 ? "−" + money(Math.abs(m.amount)) : "—"}</td>
-        <td colspan="1" class="cf-medio">${medioLabel(m.medio)} · ${h(accountName(m.account))}</td>
-        <td colspan="2"></td>
+        <td class="${m.amount > 0 ? "in" : "muted"}">${m.amount > 0 ? "+" + mc(m.amount) : "—"}</td>
+        <td class="${m.amount < 0 ? "out" : "muted"}">${m.amount < 0 ? "−" + mc(Math.abs(m.amount)) : "—"}</td>
+        <td colspan="2" class="cf-medio">${medioLabel(m.medio)} · ${h(accountName(m.account))}</td>
       </tr>`).join("");
     }
     return main + detailRows;
   }).join("");
 
+  const emptyMsg = visible.length === 0
+    ? `<tr><td colspan="6" class="cf-empty">No hay movimientos en este período. Probá otro rango o agregá un movimiento.</td></tr>`
+    : "";
+
   $("#cf-table").innerHTML = `
     <div class="cf-table-scroll">
       <table class="cf-table">
         <thead><tr>
-          <th></th><th>Fecha</th><th>Entra</th><th>Sale</th><th>Neto</th><th>Saldo</th><th>Colocable</th>
+          <th></th><th>Fecha</th><th>Entra</th><th>Sale</th><th>Neto</th><th>Saldo</th>
         </tr></thead>
-        <tbody>${rows}</tbody>
+        <tbody>${rows}${emptyMsg}</tbody>
       </table>
     </div>
     <div class="cf-table-foot">
-      <span>${withMov.length} días con movimiento · tocá una fila para ver el detalle, y un movimiento para editarlo</span>
+      <span>${fmtDateShort(days[0].date)} a ${fmtDateShort(days[days.length-1].date)} · tocá un día para ver el detalle</span>
     </div>`;
 
   $$(".cf-row").forEach((row) => {
@@ -732,7 +817,6 @@ function renderTableDaily(days) {
       renderCashflowTable();
     };
   });
-  // Click en un movimiento del detalle → editar (sin togglear el día)
   $$(".cf-mov-edit").forEach((r) => {
     r.onclick = (e) => {
       e.stopPropagation();
@@ -743,19 +827,19 @@ function renderTableDaily(days) {
 }
 
 function renderTableWeekly(days) {
-  // Agrupar por semana (lunes a domingo)
+  const ccy = days[0]?.ccy || state.cfCurrency;
+  const mc = (n) => moneyC(n, ccy);
   const weeks = {};
   days.forEach((d) => {
     const date = new Date(d.date + "T00:00:00");
     const monday = new Date(date);
     monday.setDate(date.getDate() - ((date.getDay() + 6) % 7));
     const key = monday.toISOString().slice(0, 10);
-    if (!weeks[key]) weeks[key] = { from: key, inflow: 0, outflow: 0, endBal: 0, minBal: Infinity, investable: Infinity, days: [] };
+    if (!weeks[key]) weeks[key] = { from: key, inflow: 0, outflow: 0, endBal: 0, minBal: Infinity, days: [] };
     const w = weeks[key];
     w.inflow += d.inflow; w.outflow += d.outflow;
     w.endBal = d.balance;
     w.minBal = Math.min(w.minBal, d.balance);
-    w.investable = Math.min(w.investable, d.investable);
     w.days.push(d);
   });
 
@@ -766,25 +850,107 @@ function renderTableWeekly(days) {
     return `<tr class="${alert}">
       <td></td>
       <td class="cf-date">${fmtDateShort(w.from)} – ${fmtDateShort(to)}</td>
-      <td class="${w.inflow ? "in" : "muted"}">${w.inflow ? "+" + money(w.inflow) : "—"}</td>
-      <td class="${w.outflow ? "out" : "muted"}">${w.outflow ? "−" + money(w.outflow) : "—"}</td>
-      <td class="${net > 0 ? "in" : net < 0 ? "out" : "muted"}">${net ? (net > 0 ? "+" : "") + money(net) : "—"}</td>
-      <td class="bal">${money(w.endBal)}</td>
-      <td class="${w.investable > 0 ? "inv" : "muted"}">${w.investable > 0 ? money(w.investable) : "—"}</td>
+      <td class="${w.inflow ? "in" : "muted"}">${w.inflow ? "+" + mc(w.inflow) : "—"}</td>
+      <td class="${w.outflow ? "out" : "muted"}">${w.outflow ? "−" + mc(w.outflow) : "—"}</td>
+      <td class="${net > 0 ? "in" : net < 0 ? "out" : "muted"}">${net ? (net > 0 ? "+" : "") + mc(net) : "—"}</td>
+      <td class="bal ${w.minBal < 0 ? "neg" : ""}">${mc(w.endBal)}</td>
     </tr>`;
   }).join("");
+
+  const emptyMsg = Object.keys(weeks).length === 0
+    ? `<tr><td colspan="6" class="cf-empty">No hay movimientos en este período.</td></tr>` : "";
 
   $("#cf-table").innerHTML = `
     <div class="cf-table-scroll">
       <table class="cf-table">
         <thead><tr>
-          <th></th><th>Semana</th><th>Entra</th><th>Sale</th><th>Neto</th><th>Saldo fin</th><th>Colocable mín.</th>
+          <th></th><th>Semana</th><th>Entra</th><th>Sale</th><th>Neto</th><th>Saldo fin</th>
         </tr></thead>
-        <tbody>${rows}</tbody>
+        <tbody>${rows}${emptyMsg}</tbody>
       </table>
     </div>
-    <div class="cf-table-foot"><span>${Object.keys(weeks).length} semanas · saldo al cierre y excedente mínimo de cada una</span></div>`;
+    <div class="cf-table-foot"><span>${Object.keys(weeks).length} semanas en el período</span></div>`;
   wireExport();
+}
+
+// ── Rango de fechas de la tabla (pasado + futuro) ────────
+function cfRangeDates() {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const iso = (d) => d.toISOString().slice(0,10);
+  // Rango custom tiene prioridad
+  if (state.cfFrom && state.cfTo) return { from: state.cfFrom, to: state.cfTo };
+  const r = state.cfRange || "mes";
+  const from = new Date(today), to = new Date(today);
+  if (r === "hoy") { /* from=to=hoy */ }
+  else if (r === "semana") { from.setDate(today.getDate() - ((today.getDay()+6)%7)); to.setDate(from.getDate()+6); }
+  else if (r === "mes") { from.setDate(1); to.setMonth(to.getMonth()+1); to.setDate(0); }
+  else if (r === "90") { to.setDate(today.getDate()+90); }
+  else if (r === "pasado") { from.setDate(today.getDate()-180); }
+  return { from: iso(from), to: iso(to) };
+}
+
+// Calcula el saldo día a día en el rango, para la moneda/cuenta activas.
+// El saldo running arranca del opening + todos los movimientos ANTERIORES a "from".
+function computeDaySeries(fromISO, toISO) {
+  const from = new Date(fromISO + "T00:00:00");
+  const to = new Date(toISO + "T00:00:00");
+  const ccy = state.cfAccount
+    ? (state.accounts.find(a=>a.id===state.cfAccount)?.moneda || "ARS")
+    : state.cfCurrency;
+  // Cuentas incluidas
+  const accts = state.accounts.filter(a =>
+    state.cfAccount ? a.id === state.cfAccount : a.moneda === ccy
+  );
+  const acctIds = new Set(accts.map(a=>a.id));
+  const opening = accts.reduce((s,a)=>s+(parseFloat(a.opening)||0),0);
+
+  // Expandir todos los movimientos de esas cuentas a (fecha, monto), hasta "to"
+  const byDate = {};
+  const horizonEnd = new Date(to); horizonEnd.setDate(horizonEnd.getDate()+1);
+  state.movements.forEach((m) => {
+    if (!m.amount || !m.date || !acctIds.has(m.account)) return;
+    const base = new Date(m.date + "T00:00:00");
+    const push = (d) => {
+      const k = d.toISOString().slice(0,10);
+      byDate[k] = (byDate[k]||0) + m.amount;
+    };
+    if (m.recurrence === "none") { if (base <= horizonEnd) push(base); return; }
+    let d = new Date(base), guard = 0;
+    while (d <= horizonEnd && guard < 3000) {
+      push(d);
+      if (m.recurrence === "weekly") d.setDate(d.getDate()+7);
+      else if (m.recurrence === "quincenal") d.setDate(d.getDate()+14);
+      else if (m.recurrence === "monthly") d.setMonth(d.getMonth()+1);
+      else if (m.recurrence === "quarterly") d.setMonth(d.getMonth()+3);
+      else break;
+      guard++;
+    }
+  });
+
+  // Saldo acumulado hasta el día ANTERIOR a "from"
+  let balance = opening;
+  Object.keys(byDate).forEach((k) => {
+    if (new Date(k+"T00:00:00") < from) balance += byDate[k];
+  });
+
+  // Serie día a día en el rango
+  const days = [];
+  let d = new Date(from);
+  while (d <= to) {
+    const k = d.toISOString().slice(0,10);
+    const delta = byDate[k] || 0;
+    const inflow = delta > 0 ? delta : 0;
+    const outflow = delta < 0 ? -delta : 0;
+    balance += delta;
+    days.push({
+      date: k, inflow, outflow, net: delta, balance,
+      investable: Math.max(0, balance),
+      negative: balance < 0, below_buffer: false,
+      ccy,
+    });
+    d.setDate(d.getDate()+1);
+  }
+  return days;
 }
 
 // Construye {fecha: [movimientos]} expandiendo recurrencias, para el detalle diario
@@ -2236,6 +2402,7 @@ function init() {
   // Cuentas
   renderAccounts();
   syncAccountSelectors();
+  $("#acc-manage-link")?.addEventListener("click", () => switchView("config"));
   $("#cf-account-filter").addEventListener("change", (e) => {
     state.cfAccount = e.target.value;
     project();
@@ -2265,6 +2432,36 @@ function init() {
       renderCashflowTable();
     })
   );
+
+  // Botones rápidos de período
+  $$("#cf-quick .qk").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.cfRange = b.dataset.range;
+      state.cfFrom = null; state.cfTo = null; // limpiar rango custom
+      state.cfOpenDay = null;
+      $$("#cf-quick .qk").forEach((x) => x.classList.toggle("active", x.dataset.range === state.cfRange));
+      // Limpiar inputs de rango custom
+      const { from, to } = cfRangeDates();
+      if ($("#cf-from")) $("#cf-from").value = from;
+      if ($("#cf-to")) $("#cf-to").value = to;
+      renderCashflowTable();
+    })
+  );
+  // Rango personalizado
+  const applyCustom = () => {
+    const f = $("#cf-from").value, t = $("#cf-to").value;
+    if (f && t) {
+      state.cfFrom = f; state.cfTo = t;
+      $$("#cf-quick .qk").forEach((x) => x.classList.remove("active"));
+      renderCashflowTable();
+    }
+  };
+  $("#cf-from")?.addEventListener("change", applyCustom);
+  $("#cf-to")?.addEventListener("change", applyCustom);
+  // Inicializar los inputs con el rango por defecto
+  const initRange = cfRangeDates();
+  if ($("#cf-from")) $("#cf-from").value = initRange.from;
+  if ($("#cf-to")) $("#cf-to").value = initRange.to;
 
   project();
 }

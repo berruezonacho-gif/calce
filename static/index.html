@@ -46,28 +46,11 @@
         <aside class="controls">
           <div class="ctrl-card">
             <div class="ctrl-head">
-              <h2>Cuentas</h2>
+              <h2>Saldo por cuenta</h2>
+              <button class="add-btn ghost" id="acc-manage-link">⚙ Gestionar</button>
             </div>
             <div class="accounts-list" id="accounts-list"></div>
             <div class="accounts-total" id="accounts-total"></div>
-            <label class="field" style="margin-top:14px">
-              <span>Colchón mínimo</span>
-              <div class="money-input">
-                <em>$</em>
-                <input type="number" id="buffer" value="200000" step="1000">
-              </div>
-              <small>La plata que no querés tocar nunca.</small>
-            </label>
-            <label class="field">
-              <span>Horizonte</span>
-              <select id="horizon">
-                <option value="30">30 días</option>
-                <option value="60">60 días</option>
-                <option value="90" selected>90 días</option>
-                <option value="180">6 meses</option>
-                <option value="365">1 año</option>
-              </select>
-            </label>
           </div>
 
           <div class="ctrl-card">
@@ -79,8 +62,11 @@
               </div>
             </div>
             <input type="file" id="import-file" accept=".xlsx,.xls,.csv" style="display:none">
-            <div class="mov-summary" id="mov-summary"></div>
+            <p class="mov-hint-panel">Cargá tus ingresos y gastos. Los vas a ver en el detalle por fecha, donde podés tocar cualquiera para editarlo.</p>
           </div>
+          <!-- Ocultos: mantienen la lógica de proyección -->
+          <input type="hidden" id="buffer" value="0">
+          <input type="hidden" id="horizon" value="180">
         </aside>
 
         <!-- Resultado principal -->
@@ -89,28 +75,40 @@
           <div class="currency-tabs" id="currency-tabs"></div>
           <div class="account-balances" id="account-balances"></div>
           <div class="table-card">
-            <div class="chart-head">
-              <h2>Detalle por fecha</h2>
-              <div class="chart-tools">
-                <select id="cf-account-filter" class="cf-account-filter">
-                  <option value="">Todas las cuentas</option>
-                </select>
-                <div class="view-toggle">
-                  <button class="vt-btn active" data-cfgrain="dia">Por día</button>
-                  <button class="vt-btn" data-cfgrain="semana">Por semana</button>
-                </div>
-                <button class="cf-link" id="cf-export">↓ CSV</button>
+            <div class="chart-head cf-header">
+              <h2>Flujo de caja</h2>
+              <button class="cf-link" id="cf-export">↓ CSV</button>
+            </div>
+            <!-- Barra de período -->
+            <div class="cf-period-bar">
+              <div class="cf-quick" id="cf-quick">
+                <button class="qk" data-range="hoy">Hoy</button>
+                <button class="qk" data-range="semana">Esta semana</button>
+                <button class="qk active" data-range="mes">Este mes</button>
+                <button class="qk" data-range="90">Próx. 90 días</button>
+                <button class="qk" data-range="pasado">Últimos 180 días</button>
+              </div>
+              <div class="cf-custom">
+                <label>Desde <input type="date" id="cf-from"></label>
+                <label>Hasta <input type="date" id="cf-to"></label>
+              </div>
+            </div>
+            <div class="cf-subbar">
+              <select id="cf-account-filter" class="cf-account-filter">
+                <option value="">Todas las cuentas</option>
+              </select>
+              <div class="view-toggle">
+                <button class="vt-btn active" data-cfgrain="dia">Ver por día</button>
+                <button class="vt-btn" data-cfgrain="semana">Ver por semana</button>
               </div>
             </div>
             <div id="cf-table"></div>
           </div>
           <div class="chart-card">
             <div class="chart-head">
-              <h2>Saldo proyectado</h2>
+              <h2>Evolución del saldo</h2>
               <div class="chart-legend">
                 <span class="lg lg-balance">Saldo</span>
-                <span class="lg lg-buffer">Colchón</span>
-                <span class="lg lg-surplus">Excedente</span>
               </div>
             </div>
             <div id="chart"></div>
