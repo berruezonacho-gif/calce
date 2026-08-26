@@ -24,6 +24,7 @@
       <div class="nav-dropdown">
         <button class="nav-item nav-drop-btn" data-group="inversiones">Inversiones <span class="caret">▾</span></button>
         <div class="nav-menu">
+          <button class="nav-sub" data-view="cartera">Mis inversiones</button>
           <button class="nav-sub" data-view="inversiones">Simulador</button>
           <button class="nav-sub" data-view="excedente">Excedente</button>
           <button class="nav-sub" data-view="divisas">Dólar (comprar/vender)</button>
@@ -126,6 +127,11 @@
     <!-- Vista Inversiones -->
     <section class="view hidden" id="view-inversiones">
       <div class="inv-wrap" id="inv-wrap"></div>
+    </section>
+
+    <!-- Vista Mis inversiones (cartera de colocaciones) -->
+    <section class="view hidden" id="view-cartera">
+      <div class="cartera-wrap" id="cartera-wrap"></div>
     </section>
 
     <!-- Vista Dólar: comprar / vender divisas -->
@@ -271,6 +277,49 @@
       <div class="modal-foot">
         <button class="btn-ghost" id="mov-modal-cancel">Cancelar</button>
         <button class="btn-primary" id="mov-modal-save">Agregar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: nueva inversión / colocación -->
+  <div class="modal-overlay hidden" id="inv-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="inv-modal-title">Nueva inversión</h3>
+        <button class="modal-close" id="inv-modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="field"><span>Tipo de inversión</span>
+          <select id="i-tipo"></select>
+        </label>
+        <label class="field"><span>Nombre / detalle</span>
+          <input type="text" id="i-label" placeholder="Ej: Plazo fijo Nación 30 días">
+        </label>
+        <div class="modal-row">
+          <label class="field"><span>Monto colocado</span>
+            <div class="money-input"><em id="i-cur">$</em><input type="number" id="i-monto" placeholder="0" step="1000"></div>
+          </label>
+          <label class="field"><span>Sale de la cuenta</span>
+            <select id="i-account"></select>
+          </label>
+        </div>
+        <div class="modal-row">
+          <label class="field"><span>Fecha de colocación</span>
+            <input type="date" id="i-fecha">
+          </label>
+          <label class="field" id="i-venc-field"><span>Fecha de vencimiento</span>
+            <input type="date" id="i-venc">
+          </label>
+        </div>
+        <label class="field"><span id="i-rend-label">Rendimiento esperado (TNA %)</span>
+          <div class="pct-input"><input type="number" id="i-rend" placeholder="0" step="0.5"><em>%</em></div>
+          <small id="i-rend-hint">Tasa nominal anual. La usamos para estimar cuánto vuelve al vencimiento.</small>
+        </label>
+        <div class="inv-preview-box" id="i-preview"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-ghost" id="inv-modal-cancel">Cancelar</button>
+        <button class="btn-primary" id="inv-modal-save">Registrar inversión</button>
       </div>
     </div>
   </div>

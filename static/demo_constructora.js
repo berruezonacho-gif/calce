@@ -84,16 +84,17 @@ const DEMO_CONSTRUCTORA = {
     { label: "Cuota leasing camioneta", amount: -780000, date: "d+15", recurrence: "monthly", medio: "transferencia", account: "bna-cc" },
     // Descuento de cheques / adelanto (devolución)
     { label: "Cancelación adelanto cuenta corriente", amount: -3000000, date: "d+30", recurrence: "none", medio: "transferencia", account: "bna-cc" },
+  ],
 
-    // ── INVERSIONES YA HECHAS (para ver qué problemas traen) ─
-    // El tesorero ya colocó excedente. Estas son las que hay que poder rastrear.
-    // Plazo fijo colocado hace poco: sale la plata ahora, vuelve con interés al vencimiento
-    { label: "Constitución plazo fijo 30d", amount: -10000000, date: "d-5", recurrence: "none", medio: "transferencia", account: "bna-cc" },
-    { label: "Vencimiento plazo fijo + interés", amount: 10350000, date: "d+25", recurrence: "none", medio: "transferencia", account: "bna-cc" },
-    // Suscripción a FCI money market (rescatable, pero acá cargado como salida puntual)
-    { label: "Suscripción FCI money market", amount: -8000000, date: "d-2", recurrence: "none", medio: "transferencia", account: "bna-cc" },
-    // Compra de dólares con excedente (queda en la cuenta USD)
-    { label: "Compra USD con excedente", amount: -6000000, date: "d-10", recurrence: "none", medio: "transferencia", account: "bna-cc" },
-    { label: "Ingreso por compra USD", amount: 4900, date: "d-10", recurrence: "none", medio: "transferencia", account: "usd-ca" },
+  // ── INVERSIONES YA HECHAS ────────────────────────────────
+  // El tesorero ya colocó excedente. El módulo genera solo los movimientos
+  // de calce (egreso hoy + rescate al vencimiento) a partir de estas.
+  investments: [
+    // Plazo fijo: colocado hace 5 días, vence en 25 (TNA de referencia)
+    { tipo: "plazo_fijo", label: "Plazo fijo Nación 30d", monto: 10000000, account: "bna-cc", fechaColocacion: "d-5", fechaVenc: "d+25", rendimiento: 42, estado: "activa" },
+    // FCI money market: sin vencimiento, rescatable
+    { tipo: "fci", label: "FCI money market", monto: 8000000, account: "bna-cc", fechaColocacion: "d-2", fechaVenc: null, rendimiento: 38, estado: "activa" },
+    // Dólares comprados con excedente (quedan en la cuenta USD)
+    { tipo: "dolares", label: "Tenencia en dólares", monto: 4900, account: "usd-ca", fechaColocacion: "d-10", fechaVenc: null, rendimiento: 0, estado: "activa" },
   ],
 };

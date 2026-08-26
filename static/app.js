@@ -17,6 +17,7 @@ const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<"
 // Estado
 const state = {
   movements: [],
+  investments: [], // colocaciones (plazo fijo, FCI, USD, bonos, caución)
   accounts: [
     { id: "efectivo", name: "Caja / Efectivo", banco: "", tipo: "efectivo", moneda: "ARS", alias: "", opening: 300000 },
     { id: "banco", name: "Cuenta principal", banco: "Banco de la Nación Argentina", tipo: "cc", moneda: "ARS", alias: "", opening: 500000 },
@@ -38,6 +39,19 @@ const TIPOS_CUENTA = [
   { v: "efectivo", label: "Efectivo / Caja" },
 ];
 
+// Tipos de inversión / colocación
+const TIPOS_INVERSION = [
+  { v: "plazo_fijo", label: "Plazo fijo", tieneVenc: true },
+  { v: "fci", label: "FCI (fondo común)", tieneVenc: false },
+  { v: "dolares", label: "Dólares", tieneVenc: false },
+  { v: "bono", label: "Bono", tieneVenc: true },
+  { v: "caucion", label: "Caución", tieneVenc: true },
+];
+function tipoInvLabel(v) {
+  const t = TIPOS_INVERSION.find((x) => x.v === v);
+  return t ? t.label : v;
+}
+
 // ── Persistencia (autoguardado en el navegador) ──────────
 const STORE_KEY = "calce.state.v1";
 let _saveTimer = null;
@@ -48,6 +62,7 @@ function saveState() {
     try {
       const snapshot = {
         movements: state.movements,
+        investments: state.investments,
         accounts: state.accounts,
         empresa: state.empresa,
         prefs: state.prefs,
@@ -65,6 +80,7 @@ function loadState() {
     if (!raw) return false;
     const s = JSON.parse(raw);
     if (s.movements) state.movements = s.movements;
+    if (s.investments) state.investments = s.investments;
     if (s.accounts) state.accounts = s.accounts;
     if (s.empresa) state.empresa = s.empresa;
     if (s.prefs) state.prefs = s.prefs;
@@ -291,6 +307,40 @@ function loadDemoDataset(ds) {
       medio: m.medio || "transferencia",
       account: m.account || (state.accounts[0]?.id || ""),
     });
+  });
+
+  // Inversiones del demo: traducir fechas y generar los movimientos de calce
+  state.investments = [];
+  const relDate = (v) => {
+    const rel = /^d([+-]\d+)$/.exec(v || "");
+    return rel ? addDays(parseInt(rel[1], 10)) : v;
+  };
+  (ds.investments || []).forEach((raw) => {
+    const inv = {
+      id: invId(), tipo: raw.tipo, label: raw.label, monto: raw.monto,
+      moneda: (state.accounts.find(a => a.id === raw.account)?.moneda) || "ARS",
+      account: raw.account,
+      fechaColocacion: relDate(raw.fechaColocacion),
+      fechaVenc: raw.fechaVenc ? relDate(raw.fechaVenc) : null,
+      rendimiento: raw.rendimiento || 0, estado: raw.estado || "activa",
+    };
+    state.investments.push(inv);
+    // Egreso hoy (colocación) — no es gasto
+    state.movements.push({
+      label: `Colocación: ${inv.label}`, amount: -Math.abs(inv.monto),
+      date: inv.fechaColocacion, recurrence: "none",
+      medio: "transferencia", account: inv.account,
+      invId: inv.id, movTipo: "inversion",
+    });
+    // Ingreso al vencimiento (rescate) si tiene fecha
+    if (inv.fechaVenc) {
+      state.movements.push({
+        label: `Vencimiento: ${inv.label}`, amount: Math.abs(estimarRetorno(inv)),
+        date: inv.fechaVenc, recurrence: "none",
+        medio: "transferencia", account: inv.account,
+        invId: inv.id, movTipo: "rescate",
+      });
+    }
   });
 }
 
@@ -611,12 +661,18 @@ function renderKPIs() {
   const minDay = series.reduce((min,d)=> d.balance < min.balance ? d : min, series[0]||{balance:balToday,date:todayISO});
   const minClass = minDay.balance < 0 ? "neg" : "";
   const endClass = endBal >= 0 ? "pos" : "neg";
+  const colocado = totalColocado(ccy);
 
   $("#kpi-row").innerHTML = `
     <div class="kpi hero">
-      <div class="kpi-label">Saldo hoy</div>
+      <div class="kpi-label">Líquido hoy</div>
       <div class="kpi-value">${mc(balToday)}</div>
       <div class="kpi-sub">Disponible en ${ccy} ahora</div>
+    </div>
+    <div class="kpi kpi-inv">
+      <div class="kpi-label">Colocado (invertido)</div>
+      <div class="kpi-value">${mc(colocado)}</div>
+      <div class="kpi-sub">${colocado > 0 ? "No es gasto · vuelve con rendimiento" : "Sin inversiones activas"}</div>
     </div>
     <div class="kpi">
       <div class="kpi-label">Saldo al fin del período</div>
@@ -627,11 +683,6 @@ function renderKPIs() {
       <div class="kpi-label">Piso de caja del período</div>
       <div class="kpi-value ${minClass}">${mc(minDay.balance)}</div>
       <div class="kpi-sub">El ${fmtDate(minDay.date)}</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Movido en el período</div>
-      <div class="kpi-value">${mc(totalIn)}</div>
-      <div class="kpi-sub">entra · sale ${mc(totalOut)}</div>
     </div>`;
 }
 
@@ -782,13 +833,21 @@ function renderTableDaily(days) {
     </tr>`;
     let detailRows = "";
     if (open && detail.length) {
-      detailRows = detail.map((m) => `<tr class="cf-detail cf-mov-edit" data-idx="${m._idx}" title="Tocá para editar o eliminar">
+      detailRows = detail.map((m) => {
+        const isInv = m.movTipo === "inversion";
+        const isResc = m.movTipo === "rescate";
+        const invTag = isInv ? '<span class="mov-inv-tag">◆ colocación</span>'
+                     : isResc ? '<span class="mov-resc-tag">◆ vuelve de inversión</span>' : '';
+        const rowClass = isInv || isResc ? "cf-detail cf-mov-inv" : "cf-detail cf-mov-edit";
+        const editHint = (isInv || isResc) ? '' : '<span class="cf-edit-hint">editar</span>';
+        return `<tr class="${rowClass}" data-idx="${m._idx}" title="${isInv||isResc ? 'Movimiento de inversión (se gestiona en Mis inversiones)' : 'Tocá para editar o eliminar'}">
         <td></td>
-        <td class="cf-detail-label" colspan="1">${h(m.label || "(sin concepto)")} <span class="cf-edit-hint">editar</span></td>
+        <td class="cf-detail-label" colspan="1">${h(m.label || "(sin concepto)")} ${invTag} ${editHint}</td>
         <td class="${m.amount > 0 ? "in" : "muted"}">${m.amount > 0 ? "+" + mc(m.amount) : "—"}</td>
         <td class="${m.amount < 0 ? "out" : "muted"}">${m.amount < 0 ? "−" + mc(Math.abs(m.amount)) : "—"}</td>
         <td colspan="2" class="cf-medio">${medioLabel(m.medio)} · ${h(accountName(m.account))}</td>
-      </tr>`).join("");
+      </tr>`;
+      }).join("");
     }
     return main + detailRows;
   }).join("");
@@ -821,6 +880,13 @@ function renderTableDaily(days) {
     r.onclick = (e) => {
       e.stopPropagation();
       openMovModal(parseInt(r.dataset.idx, 10));
+    };
+  });
+  // Filas de inversión: llevan a la cartera en vez de abrir el modal de movimiento
+  $$(".cf-mov-inv").forEach((r) => {
+    r.onclick = (e) => {
+      e.stopPropagation();
+      switchView("cartera");
     };
   });
   wireExport();
@@ -1107,6 +1173,324 @@ function renderExcedente() {
 }
 
 // ── Dólar: comprar / vender divisas ──────────────────────
+// ═══ MIS INVERSIONES (cartera de colocaciones) ═══════════
+// Concepto clave: una inversión NO es un gasto. Es plata que sigue
+// siendo tuya, cambia de líquida a colocada, y vuelve en una fecha.
+
+function invId() { return "inv" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+// Estima cuánto vuelve al vencimiento (capital + rendimiento).
+function estimarRetorno(inv) {
+  const monto = parseFloat(inv.monto) || 0;
+  const rend = parseFloat(inv.rendimiento) || 0;
+  if (!rend) return monto;
+  // Con fecha de vencimiento: interés proporcional a los días (TNA)
+  if (inv.fechaVenc && inv.fechaColocacion) {
+    const d0 = new Date(inv.fechaColocacion + "T00:00:00");
+    const d1 = new Date(inv.fechaVenc + "T00:00:00");
+    const dias = Math.max(0, Math.round((d1 - d0) / 86400000));
+    return monto * (1 + (rend / 100) * (dias / 365));
+  }
+  // Sin vencimiento (FCI, dólares): mostramos el capital; el rend es referencia anual
+  return monto;
+}
+
+// ¿Está activa hoy? (colocada y todavía no venció)
+function invActiva(inv) {
+  if (inv.estado === "rescatada") return false;
+  if (!inv.fechaVenc) return true; // sin vencimiento: activa hasta que la rescaten
+  return new Date(inv.fechaVenc + "T00:00:00") >= new Date(new Date().toISOString().slice(0,10) + "T00:00:00");
+}
+
+// Total colocado hoy, por moneda (lo que está invertido y todavía no volvió)
+function totalColocado(ccy) {
+  return state.investments
+    .filter((inv) => invActiva(inv) && inv.moneda === ccy)
+    .reduce((s, inv) => s + (parseFloat(inv.monto) || 0), 0);
+}
+
+function renderCartera() {
+  const wrap = $("#cartera-wrap");
+  const ccy = "ARS"; // la cartera muestra ARS + USD juntas en tarjetas separadas
+  const invs = state.investments;
+
+  // Liquidez hoy (suma de saldos a hoy en ARS)
+  const liquidezHoy = (moneda) => {
+    const today = new Date(); today.setHours(23,59,59,999);
+    return state.accounts.filter(a => a.moneda === moneda).reduce((tot, a) => {
+      let bal = parseFloat(a.opening)||0;
+      state.movements.forEach((m) => {
+        if (m.account !== a.id || !m.amount || !m.date) return;
+        const base = new Date(m.date+"T00:00:00");
+        if (m.recurrence === "none") { if (base <= today) bal += m.amount; }
+        else { let d=new Date(base),g=0; while(d<=today&&g<2000){bal+=m.amount;
+          if(m.recurrence==="weekly")d.setDate(d.getDate()+7);
+          else if(m.recurrence==="quincenal")d.setDate(d.getDate()+14);
+          else if(m.recurrence==="monthly")d.setMonth(d.getMonth()+1);
+          else if(m.recurrence==="quarterly")d.setMonth(d.getMonth()+3);
+          else break; g++;} }
+      });
+      return tot + bal;
+    }, 0);
+  };
+
+  const liqARS = liquidezHoy("ARS"), colARS = totalColocado("ARS");
+  const liqUSD = liquidezHoy("USD"), colUSD = totalColocado("USD");
+  const hasUSDinv = liqUSD !== 0 || colUSD !== 0;
+
+  // Tablero de liquidez: líquido vs colocado
+  const tablero = (moneda, liq, col) => {
+    const total = liq + col;
+    const pctCol = total > 0 ? Math.round((col / total) * 100) : 0;
+    return `
+      <div class="liq-board">
+        <div class="liq-head">
+          <span class="liq-ccy">${moneda === "USD" ? "US$ Dólares" : "$ Pesos"}</span>
+          <span class="liq-total">Patrimonio: ${moneyC(total, moneda)}</span>
+        </div>
+        <div class="liq-bar">
+          <div class="liq-fill-liq" style="width:${100-pctCol}%" title="Líquido"></div>
+          <div class="liq-fill-col" style="width:${pctCol}%" title="Colocado"></div>
+        </div>
+        <div class="liq-legend">
+          <div class="liq-item">
+            <span class="dot dot-liq"></span>
+            <div><b>${moneyC(liq, moneda)}</b><small>Líquido disponible</small></div>
+          </div>
+          <div class="liq-item">
+            <span class="dot dot-col"></span>
+            <div><b>${moneyC(col, moneda)}</b><small>Colocado (vuelve)</small></div>
+          </div>
+        </div>
+      </div>`;
+  };
+
+  // Tabla de colocaciones activas
+  const activas = invs.filter(invActiva);
+  const rescatadas = invs.filter((i) => !invActiva(i));
+
+  const filaInv = (inv) => {
+    const retorno = estimarRetorno(inv);
+    const ganancia = retorno - (parseFloat(inv.monto) || 0);
+    const venc = inv.fechaVenc ? fmtDateFull(inv.fechaVenc) : "Sin vencimiento";
+    const diasRest = inv.fechaVenc
+      ? Math.round((new Date(inv.fechaVenc+"T00:00:00") - new Date()) / 86400000)
+      : null;
+    const vencInfo = diasRest !== null
+      ? (diasRest >= 0 ? `${venc} · en ${diasRest} días` : `${venc} · vencida`)
+      : venc;
+    const activa = invActiva(inv);
+    const acciones = activa
+      ? `<button class="inv-rescatar-btn" data-resc="${inv.id}" title="Traer la plata de vuelta a la cuenta">Rescatar</button>
+         <button class="inv-del-btn" data-del="${inv.id}" title="Eliminar">×</button>`
+      : `<button class="inv-del-btn" data-del="${inv.id}" title="Eliminar">×</button>`;
+    return `<tr class="inv-row" data-id="${inv.id}">
+      <td><span class="inv-tag inv-${inv.tipo}">${tipoInvLabel(inv.tipo)}</span></td>
+      <td class="inv-name">${h(inv.label || tipoInvLabel(inv.tipo))}</td>
+      <td class="mono">${moneyC(inv.monto, inv.moneda)}</td>
+      <td class="mono">${inv.rendimiento ? num2g(inv.rendimiento) + "%" : "—"}</td>
+      <td>${vencInfo}</td>
+      <td class="mono ${ganancia > 0 ? "in" : "muted"}">${ganancia > 0 ? "+" + moneyC(ganancia, inv.moneda) : "—"}</td>
+      <td class="inv-actions">${acciones}</td>
+    </tr>`;
+  };
+
+  wrap.innerHTML = `
+    <div class="inv-head">
+      <div>
+        <div class="eyebrow">Tesorería</div>
+        <h2 class="inv-title">Mis inversiones</h2>
+        <p class="inv-sub">Todo lo que colocaste sigue siendo tuyo. Acá ves cuánto tenés líquido y cuánto está trabajando, y cuándo vuelve cada colocación.</p>
+      </div>
+      <button class="btn-primary" id="cartera-add">+ Registrar inversión</button>
+    </div>
+
+    <div class="liq-boards ${hasUSDinv ? "two" : ""}">
+      ${tablero("ARS", liqARS, colARS)}
+      ${hasUSDinv ? tablero("USD", liqUSD, colUSD) : ""}
+    </div>
+
+    <div class="callout-info">
+      <b>Una inversión no es un gasto.</b> Cuando colocás plata, sale de tu cuenta pero se suma a "colocado". En el flujo de caja la vas a ver salir hoy y volver (con su rendimiento) en la fecha de vencimiento — no como una pérdida.
+    </div>
+
+    <div class="table-card" style="margin-top:20px">
+      <div class="chart-head"><h2>Colocaciones activas</h2></div>
+      ${activas.length ? `<div class="cf-table-scroll"><table class="cf-table inv-table">
+        <thead><tr><th>Tipo</th><th>Detalle</th><th>Monto</th><th>Rend.</th><th>Vencimiento</th><th>Ganancia est.</th><th></th></tr></thead>
+        <tbody>${activas.map(filaInv).join("")}</tbody>
+      </table></div>` : `<p class="cf-empty">Todavía no registraste inversiones. Tocá "Registrar inversión" para empezar.</p>`}
+    </div>
+
+    ${rescatadas.length ? `<div class="table-card" style="margin-top:16px">
+      <div class="chart-head"><h2>Vencidas / rescatadas</h2></div>
+      <div class="cf-table-scroll"><table class="cf-table inv-table">
+        <thead><tr><th>Tipo</th><th>Detalle</th><th>Monto</th><th>Rend.</th><th>Vencimiento</th><th>Ganancia</th><th></th></tr></thead>
+        <tbody>${rescatadas.map(filaInv).join("")}</tbody>
+      </table></div>
+    </div>` : ""}`;
+
+  $("#cartera-add").onclick = () => openInvModal();
+  $$(".inv-del-btn").forEach((b) => b.onclick = (e) => {
+    e.stopPropagation();
+    eliminarInversion(b.dataset.del);
+  });
+  $$(".inv-rescatar-btn").forEach((b) => b.onclick = (e) => {
+    e.stopPropagation();
+    rescatarInversion(b.dataset.resc);
+  });
+}
+
+// Rescatar: traer la plata de vuelta a la cuenta (para FCI/dólares sin
+// vencimiento, o para cerrar un plazo fijo antes de tiempo).
+function rescatarInversion(id) {
+  const inv = state.investments.find((i) => i.id === id);
+  if (!inv) return;
+  const sugerido = Math.round(estimarRetorno(inv));
+  const hoy = new Date().toISOString().slice(0,10);
+  const txt = prompt(
+    `Rescatar "${inv.label}".\n\n¿Cuánto vuelve a la cuenta? (capital + lo que rindió)\nSugerido: ${sugerido}`,
+    sugerido
+  );
+  if (txt === null) return;
+  const monto = parseFloat(txt);
+  if (!monto || monto <= 0) { alert("Ingresá un monto válido."); return; }
+  // Marcar como rescatada
+  inv.estado = "rescatada";
+  inv.fechaRescate = hoy;
+  inv.montoRescate = monto;
+  // Si tenía un rescate automático futuro (plazo fijo con vencimiento), lo quitamos
+  state.movements = state.movements.filter((m) => !(m.invId === inv.id && m.movTipo === "rescate"));
+  // Generar el ingreso real del rescate hoy
+  state.movements.push({
+    label: `Rescate: ${inv.label}`,
+    amount: Math.abs(monto),
+    date: hoy, recurrence: "none",
+    medio: "transferencia", account: inv.account,
+    invId: inv.id, movTipo: "rescate",
+  });
+  project();
+  renderCartera();
+}
+
+// ── Modal de inversión ───────────────────────────────────
+function openInvModal() {
+  // Poblar selects
+  $("#i-tipo").innerHTML = TIPOS_INVERSION.map(t => `<option value="${t.v}">${t.label}</option>`).join("");
+  syncInvAccountSelect();
+  $("#i-label").value = "";
+  $("#i-monto").value = "";
+  $("#i-fecha").value = new Date().toISOString().slice(0,10);
+  $("#i-venc").value = "";
+  $("#i-rend").value = "";
+  updateInvTipo();
+  updateInvPreview();
+  $("#inv-modal").classList.remove("hidden");
+  setTimeout(() => $("#i-label").focus(), 50);
+}
+function closeInvModal() { $("#inv-modal").classList.add("hidden"); }
+
+function syncInvAccountSelect() {
+  $("#i-account").innerHTML = state.accounts.map(a =>
+    `<option value="${a.id}">${h(a.name)}${a.moneda === "USD" ? " (USD)" : ""}</option>`).join("");
+}
+
+function updateInvTipo() {
+  const tipo = TIPOS_INVERSION.find(t => t.v === $("#i-tipo").value);
+  const acc = state.accounts.find(a => a.id === $("#i-account").value);
+  $("#i-cur").textContent = acc && acc.moneda === "USD" ? "US$" : "$";
+  // Mostrar/ocultar vencimiento según el tipo
+  $("#i-venc-field").style.display = tipo && tipo.tieneVenc ? "" : "none";
+  // Ajustar label del rendimiento
+  if (tipo && tipo.tieneVenc) {
+    $("#i-rend-label").textContent = "Rendimiento esperado (TNA %)";
+    $("#i-rend-hint").textContent = "Tasa nominal anual. La usamos para estimar cuánto vuelve al vencimiento.";
+  } else {
+    $("#i-rend-label").textContent = "Rendimiento anual estimado (%)";
+    $("#i-rend-hint").textContent = "Referencia anual. Sin vencimiento fijo, lo podés rescatar cuando quieras.";
+  }
+}
+
+function updateInvPreview() {
+  const monto = parseFloat($("#i-monto").value) || 0;
+  const rend = parseFloat($("#i-rend").value) || 0;
+  const tipo = TIPOS_INVERSION.find(t => t.v === $("#i-tipo").value);
+  const acc = state.accounts.find(a => a.id === $("#i-account").value);
+  const ccy = acc ? acc.moneda : "ARS";
+  const box = $("#i-preview");
+  if (!monto) { box.innerHTML = ""; return; }
+  const inv = {
+    monto, rendimiento: rend,
+    fechaColocacion: $("#i-fecha").value,
+    fechaVenc: (tipo && tipo.tieneVenc) ? $("#i-venc").value : null,
+  };
+  const retorno = estimarRetorno(inv);
+  const ganancia = retorno - monto;
+  box.innerHTML = `
+    <div class="dv-row"><span>Colocás hoy</span><b>${moneyC(monto, ccy)}</b></div>
+    ${inv.fechaVenc && ganancia > 0 ? `
+    <div class="dv-row"><span>Vuelve el ${fmtDateShort(inv.fechaVenc)}</span><b class="in">${moneyC(retorno, ccy)}</b></div>
+    <div class="dv-row"><span>Ganancia estimada</span><b class="in">+${moneyC(ganancia, ccy)}</b></div>` : ""}
+    <p class="modal-note">La plata sale de tu cuenta hoy pero sigue siendo tuya: la vas a ver como "colocada", no como gasto.</p>`;
+}
+
+function saveInvFromModal() {
+  const tipo = $("#i-tipo").value;
+  const tipoDef = TIPOS_INVERSION.find(t => t.v === tipo);
+  const label = $("#i-label").value.trim() || tipoInvLabel(tipo);
+  const monto = parseFloat($("#i-monto").value);
+  const account = $("#i-account").value;
+  const acc = state.accounts.find(a => a.id === account);
+  const fecha = $("#i-fecha").value;
+  const venc = tipoDef.tieneVenc ? $("#i-venc").value : null;
+  const rend = parseFloat($("#i-rend").value) || 0;
+
+  if (!monto) { alert("Ingresá el monto a colocar."); return; }
+  if (!account) { alert("Elegí de qué cuenta sale."); return; }
+  if (tipoDef.tieneVenc && !venc) { alert("Ingresá la fecha de vencimiento."); return; }
+
+  const inv = {
+    id: invId(), tipo, label, monto: Math.abs(monto),
+    moneda: acc ? acc.moneda : "ARS", account,
+    fechaColocacion: fecha, fechaVenc: venc,
+    rendimiento: rend, estado: "activa",
+  };
+  state.investments.push(inv);
+
+  // ── El "calce": generar los movimientos en el cash flow ──
+  // 1) Egreso hoy: sale de la cuenta (marcado como inversión, NO gasto)
+  state.movements.push({
+    label: `Colocación: ${label}`,
+    amount: -Math.abs(monto),
+    date: fecha, recurrence: "none",
+    medio: "transferencia", account,
+    invId: inv.id, movTipo: "inversion",
+  });
+  // 2) Ingreso futuro al vencimiento: vuelve capital + rendimiento
+  if (venc) {
+    const retorno = estimarRetorno(inv);
+    state.movements.push({
+      label: `Vencimiento: ${label}`,
+      amount: Math.abs(retorno),
+      date: venc, recurrence: "none",
+      medio: "transferencia", account,
+      invId: inv.id, movTipo: "rescate",
+    });
+  }
+
+  closeInvModal();
+  project();
+  switchView("cartera");
+}
+
+function eliminarInversion(id) {
+  if (!confirm("¿Eliminar esta inversión? También se quitan sus movimientos del flujo.")) return;
+  state.investments = state.investments.filter(i => i.id !== id);
+  state.movements = state.movements.filter(m => m.invId !== id);
+  project();
+  renderCartera();
+}
+
 async function renderDivisas() {
   const num2 = (v) => v == null ? "—" : new Intl.NumberFormat("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
   const wrap = $("#divisas-wrap");
@@ -1556,6 +1940,7 @@ async function renderInversiones() {
 }
 
 const num = (v) => v == null ? "—" : new Intl.NumberFormat("es-AR", { maximumFractionDigits: 1 }).format(v);
+const num2g = (v) => v == null ? "—" : new Intl.NumberFormat("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
 
 // ── Mercado de bonos (tableros + curvas + carry + variables) ──
 const FAM_LABELS = {
@@ -2305,6 +2690,7 @@ function switchView(view) {
 
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${view}`).classList.remove("hidden");
+  if (view === "cartera") renderCartera();
   if (view === "inversiones") renderInversiones();
   if (view === "divisas") renderDivisas();
   if (view === "mercado") renderMercado();
@@ -2353,6 +2739,15 @@ function init() {
     renderCuotas();
   });
   $("#m-account").addEventListener("change", () => { updateModalCurrency(); renderCuotas(); });
+
+  // Modal de inversión
+  $("#inv-modal-save").addEventListener("click", saveInvFromModal);
+  $("#inv-modal-close").addEventListener("click", closeInvModal);
+  $("#inv-modal-cancel").addEventListener("click", closeInvModal);
+  $("#i-tipo").addEventListener("change", () => { updateInvTipo(); updateInvPreview(); });
+  $("#i-account").addEventListener("change", () => { updateInvTipo(); updateInvPreview(); });
+  ["#i-monto","#i-rend","#i-fecha","#i-venc"].forEach(sel =>
+    $(sel).addEventListener("input", updateInvPreview));
 
   // Importar desde Excel/CSV
   $("#import-mov").addEventListener("click", () => $("#import-file").click());
