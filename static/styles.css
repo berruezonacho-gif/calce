@@ -906,3 +906,66 @@ input:focus, select:focus {
 .inv-actions { white-space: nowrap; text-align: right; }
 .inv-rescatar-btn { background: var(--navy); color: #fff; border: none; border-radius: 7px; padding: 5px 12px; font-family: "Inter", sans-serif; font-size: 12px; font-weight: 600; cursor: pointer; margin-right: 6px; transition: .12s; }
 .inv-rescatar-btn:hover { background: var(--accent); }
+
+/* ═══ Grilla tipo planilla del cash flow ══════════════════ */
+.cf-subbar-left { display: flex; gap: 12px; align-items: center; }
+.mode-toggle .vt-btn { font-weight: 600; }
+.grid-scroll { overflow-x: auto; }
+.cf-grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cf-grid th, .cf-grid td { padding: 8px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line-2); }
+.cf-grid thead th { background: var(--navy); color: #fff; font-weight: 600; font-size: 12px; position: sticky; top: 0; }
+.grid-corner, .grid-catname, .grid-detailname { text-align: left !important; position: sticky; left: 0; background: var(--card); z-index: 1; }
+.cf-grid thead .grid-corner { background: var(--navy); z-index: 2; }
+.grid-per { min-width: 90px; }
+.grid-total-h, .grid-total { font-weight: 700; }
+.grid-num { font-family: var(--mono); font-size: 12.5px; }
+.grid-num.in { color: var(--green); }
+.grid-num.out { color: var(--red); }
+.grid-num.inv { color: #C86A00; }
+.grid-num.muted { color: var(--line); }
+.grid-num.neg { color: var(--red); font-weight: 700; }
+
+.grid-sec td { background: var(--paper); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; color: var(--slate-2); text-transform: uppercase; padding: 6px 12px; text-align: left; }
+.grid-sec td:first-child { position: sticky; left: 0; background: var(--paper); }
+.grid-cat { cursor: pointer; }
+.grid-cat:hover td { background: #F7FAFF; }
+.grid-cat:hover .grid-catname { background: #F7FAFF; }
+.grid-catname { font-weight: 500; color: var(--ink); }
+.grid-detail td { background: #FBFCFE; font-size: 11.5px; }
+.grid-detailname { padding-left: 28px !important; color: var(--slate); background: #FBFCFE !important; font-weight: 400; }
+.grid-num.sm { font-size: 11.5px; color: var(--slate); }
+
+.grid-tot td { font-weight: 600; border-top: 1px solid var(--line); }
+.grid-tot td:first-child { position: sticky; left: 0; background: var(--card); text-align: left; }
+.grid-tot.tot-in td { color: var(--green); }
+.grid-tot.tot-out td { color: var(--red); }
+.grid-neto td { font-weight: 700; background: var(--paper); }
+.grid-neto td:first-child { position: sticky; left: 0; background: var(--paper); text-align: left; }
+.grid-inv td { background: #FFFBF4; color: #C86A00; font-size: 12px; }
+.grid-inv td:first-child { position: sticky; left: 0; background: #FFFBF4; text-align: left; }
+.grid-saldo td { font-weight: 700; background: var(--navy); color: #fff; font-size: 13.5px; }
+.grid-saldo td:first-child { position: sticky; left: 0; background: var(--navy); text-align: left; }
+.grid-saldo .grid-num { color: #fff; }
+.grid-saldo .grid-num.neg { color: #FF9B9B; }
+
+/* ═══ Vista Saldos ════════════════════════════════════════ */
+.saldos-ccy-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.saldo-ccy-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; box-shadow: var(--shadow); }
+.saldo-ccy-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
+.saldo-ccy-name { font-family: "Fraunces", serif; font-size: 16px; font-weight: 600; }
+.saldo-ccy-total { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--navy); }
+.saldo-split { display: flex; gap: 32px; margin-bottom: 12px; }
+.saldo-split small { font-size: 11px; color: var(--slate-2); display: block; }
+.saldo-split b { font-family: var(--mono); font-size: 15px; }
+.saldo-split b.col { color: #C86A00; }
+
+.sc-name b { display: block; font-size: 13.5px; }
+.sc-name small { font-size: 11px; color: var(--slate-2); }
+.saldos-svg { width: 100%; height: auto; display: block; }
+
+.saldos-info-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 16px; }
+.saldos-info-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; text-align: center; box-shadow: var(--shadow); }
+.saldos-info-card.link { cursor: pointer; transition: .14s; }
+.saldos-info-card.link:hover { border-color: var(--accent); }
+.si-num { font-family: "Fraunces", serif; font-size: 26px; font-weight: 600; color: var(--navy); }
+.si-label { font-size: 12px; color: var(--slate); margin-top: 4px; }

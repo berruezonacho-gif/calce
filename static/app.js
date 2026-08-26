@@ -31,6 +31,8 @@ const state = {
   cfFrom: null, // rango de fechas de la tabla (ISO) — null = default (mes)
   cfTo: null,
   cfRange: "mes", // botón rápido activo
+  cfMode: "grilla", // grilla | detalle
+  cfGrain: "semana", // dia | semana | mes
 };
 
 const TIPOS_CUENTA = [
@@ -50,6 +52,62 @@ const TIPOS_INVERSION = [
 function tipoInvLabel(v) {
   const t = TIPOS_INVERSION.find((x) => x.v === v);
   return t ? t.label : v;
+}
+
+// ── Categorías del cash flow ─────────────────────────────
+// Cada categoría es de ingreso (in) o egreso (out). Se usan para agrupar
+// el flujo en la grilla tipo planilla.
+const CATEGORIAS = [
+  // Ingresos
+  { v: "ventas", label: "Ventas / Cobranzas", flujo: "in" },
+  { v: "certificaciones", label: "Certificaciones de obra", flujo: "in" },
+  { v: "anticipos", label: "Anticipos de clientes", flujo: "in" },
+  { v: "otros_ingresos", label: "Otros ingresos", flujo: "in" },
+  // Egresos
+  { v: "sueldos", label: "Sueldos y jornales", flujo: "out" },
+  { v: "cargas", label: "Cargas sociales", flujo: "out" },
+  { v: "proveedores", label: "Proveedores", flujo: "out" },
+  { v: "subcontratos", label: "Subcontratistas", flujo: "out" },
+  { v: "materiales", label: "Materiales / Corralón", flujo: "out" },
+  { v: "impuestos", label: "Impuestos", flujo: "out" },
+  { v: "alquileres", label: "Alquileres", flujo: "out" },
+  { v: "servicios", label: "Servicios", flujo: "out" },
+  { v: "financiacion", label: "Financiación / Leasing", flujo: "out" },
+  { v: "otros_egresos", label: "Otros egresos", flujo: "out" },
+];
+function catLabel(v) {
+  const c = CATEGORIAS.find((x) => x.v === v);
+  return c ? c.label : (v || "Sin categoría");
+}
+function catFlujo(v) {
+  const c = CATEGORIAS.find((x) => x.v === v);
+  return c ? c.flujo : null;
+}
+
+// Clasificador automático por palabras clave en el concepto
+function clasificarCategoria(label, amount) {
+  const t = (label || "").toLowerCase();
+  const kw = (arr) => arr.some((w) => t.includes(w));
+  if (kw(["certific", "avance de obra"])) return "certificaciones";
+  if (kw(["anticipo"])) return "anticipos";
+  if (kw(["cobr", "venta", "factura", "cliente"])) return "ventas";
+  if (kw(["sueldo", "jornal", "salario", "haberes", "uocra", "quincena"])) return "sueldos";
+  if (kw(["carga social", "aporte", "sindic", "obra social", "art"])) return "cargas";
+  if (kw(["subcontrat", "cuadrilla"])) return "subcontratos";
+  if (kw(["corralón", "corralon", "material", "hierro", "cemento", "acopio", "árido", "arido", "hormig"])) return "materiales";
+  if (kw(["iva", "iibb", "ingresos brutos", "ganancias", "afip", "arca", "impuesto", "monotributo", "tasa"])) return "impuestos";
+  if (kw(["alquiler", "renta"])) return "alquileres";
+  if (kw(["luz", "gas", "agua", "internet", "telefon", "electric", "servicio", "combustible", "nafta", "gasoil"])) return "servicios";
+  if (kw(["leasing", "cuota", "préstamo", "prestamo", "adelanto", "interés", "interes", "descuento cheque"])) return "financiacion";
+  if (kw(["proveedor", "pago a"])) return "proveedores";
+  // Fallback según signo
+  return amount >= 0 ? "otros_ingresos" : "otros_egresos";
+}
+// Devuelve la categoría de un movimiento (la guardada, o la clasificada al vuelo)
+function movCategoria(m) {
+  if (m.categoria) return m.categoria;
+  if (m.movTipo === "inversion" || m.movTipo === "rescate") return null; // no cuentan como ingreso/egreso operativo
+  return clasificarCategoria(m.label, m.amount);
 }
 
 // ── Persistencia (autoguardado en el navegador) ──────────
@@ -803,10 +861,232 @@ function wireChartHover(days, X, Y, P, iw) {
 // ── Tabla estilo Excel (día / semana, con detalle) ──────
 function renderCashflowTable() {
   const { from, to } = cfRangeDates();
+  const mode = state.cfMode || "grilla";
+  if (mode === "grilla") {
+    // La grilla usa semana o mes (no día); si está en "día", forzar semana
+    let g = state.cfGrain || "semana";
+    if (g === "dia") g = "semana";
+    return renderGrid(from, to, g);
+  }
+  // Modo detalle
   const days = computeDaySeries(from, to);
-  const grain = state.cfGrain || "dia";
+  const grain = state.cfGrain === "mes" ? "semana" : (state.cfGrain || "dia");
   if (grain === "semana") return renderTableWeekly(days);
   return renderTableDaily(days);
+}
+
+// Genera los períodos (columnas) entre from y to según el grano
+function buildPeriods(fromISO, toISO, grain) {
+  const from = new Date(fromISO + "T00:00:00");
+  const to = new Date(toISO + "T00:00:00");
+  const periods = [];
+  if (grain === "mes") {
+    let d = new Date(from.getFullYear(), from.getMonth(), 1);
+    while (d <= to) {
+      const start = new Date(d);
+      const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+      periods.push({ start, end, label: d.toLocaleDateString("es-AR", { month: "short", year: "2-digit" }) });
+      d.setMonth(d.getMonth() + 1);
+    }
+  } else { // semana (lunes a domingo)
+    let d = new Date(from);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // ir al lunes
+    while (d <= to) {
+      const start = new Date(d);
+      const end = new Date(d); end.setDate(end.getDate() + 6);
+      periods.push({ start, end, label: `${start.getDate()}/${start.getMonth()+1}` });
+      d.setDate(d.getDate() + 7);
+    }
+  }
+  return periods;
+}
+
+// ¿En qué período cae una fecha?
+function periodIndex(periods, dateISO) {
+  const d = new Date(dateISO + "T00:00:00");
+  for (let i = 0; i < periods.length; i++) {
+    if (d >= periods[i].start && d <= periods[i].end) return i;
+  }
+  return -1;
+}
+
+function renderGrid(fromISO, toISO, grain) {
+  const ccy = state.cfAccount
+    ? (state.accounts.find(a=>a.id===state.cfAccount)?.moneda || "ARS")
+    : state.cfCurrency;
+  const mc = (n) => moneyC(n, ccy);
+  const periods = buildPeriods(fromISO, toISO, grain);
+  const acctIds = new Set(state.accounts.filter(a =>
+    state.cfAccount ? a.id === state.cfAccount : a.moneda === ccy).map(a=>a.id));
+
+  // Matriz: categoria -> [monto por período]
+  const catData = {}; // {catV: {label, flujo, cells:[], total}}
+  const ensureCat = (v) => {
+    if (!catData[v]) {
+      const c = CATEGORIAS.find(x=>x.v===v) || { label: catLabel(v), flujo: "out" };
+      catData[v] = { v, label: c.label, flujo: c.flujo, cells: periods.map(()=>0), total: 0 };
+    }
+    return catData[v];
+  };
+
+  // Expandir movimientos (con recurrencia) dentro del rango y sumarlos a su celda
+  const horizonEnd = periods.length ? periods[periods.length-1].end : new Date(toISO+"T00:00:00");
+  const horizonStart = periods.length ? periods[0].start : new Date(fromISO+"T00:00:00");
+  let invCells = periods.map(()=>0); // fila de "movimientos de inversión" (informativa)
+  state.movements.forEach((m) => {
+    if (!m.amount || !m.date || !acctIds.has(m.account)) return;
+    const expand = [];
+    const base = new Date(m.date+"T00:00:00");
+    if (m.recurrence === "none") { expand.push(base); }
+    else {
+      let d = new Date(base), g=0;
+      while (d <= horizonEnd && g<3000) {
+        expand.push(new Date(d));
+        if (m.recurrence==="weekly") d.setDate(d.getDate()+7);
+        else if (m.recurrence==="quincenal") d.setDate(d.getDate()+14);
+        else if (m.recurrence==="monthly") d.setMonth(d.getMonth()+1);
+        else if (m.recurrence==="quarterly") d.setMonth(d.getMonth()+3);
+        else break; g++;
+      }
+    }
+    expand.forEach((d) => {
+      if (d < horizonStart || d > horizonEnd) return;
+      const pi = periodIndex(periods, d.toISOString().slice(0,10));
+      if (pi < 0) return;
+      // Inversiones: fila aparte
+      if (m.movTipo === "inversion" || m.movTipo === "rescate") {
+        invCells[pi] += m.amount;
+        return;
+      }
+      const cat = movCategoria(m);
+      const row = ensureCat(cat);
+      row.cells[pi] += m.amount;
+      row.total += m.amount;
+    });
+  });
+
+  // Separar ingresos y egresos
+  const cats = Object.values(catData);
+  const ingresos = cats.filter(c => c.flujo === "in" && c.cells.some(v=>v!==0));
+  const egresos = cats.filter(c => c.flujo === "out" && c.cells.some(v=>v!==0));
+
+  // Totales por período
+  const totIn = periods.map((_,i)=> ingresos.reduce((s,c)=>s+Math.max(0,c.cells[i]),0) + ingresos.reduce((s,c)=>s+Math.min(0,c.cells[i]),0));
+  const totInPos = periods.map((_,i)=> ingresos.reduce((s,c)=>s+c.cells[i],0));
+  const totOut = periods.map((_,i)=> egresos.reduce((s,c)=>s+c.cells[i],0));
+  const neto = periods.map((_,i)=> totInPos[i] + totOut[i]);
+
+  // Saldo running: arranca del saldo al inicio del rango
+  const openingSeed = computeDaySeries(
+    new Date(horizonStart.getTime()-86400000).toISOString().slice(0,10),
+    new Date(horizonStart.getTime()-86400000).toISOString().slice(0,10)
+  );
+  let saldoIni = openingSeed.length ? openingSeed[0].balance : 0;
+  const saldos = [];
+  let run = saldoIni;
+  periods.forEach((_,i) => { run += neto[i]; saldos.push(run); });
+
+  // Fila de categoría (con detalle expandible)
+  const catRow = (c) => {
+    const open = state.cfOpenCat === c.v;
+    const cells = c.cells.map((v) =>
+      `<td class="grid-num ${v>0?'in':v<0?'out':'muted'}">${v ? mc(Math.abs(v)) : "·"}</td>`).join("");
+    return `<tr class="grid-cat" data-cat="${c.v}">
+      <td class="grid-catname">${open?"▾":"▸"} ${h(c.label)}</td>
+      ${cells}
+      <td class="grid-num grid-total ${c.total>0?'in':c.total<0?'out':''}">${mc(Math.abs(c.total))}</td>
+    </tr>`;
+  };
+
+  const secHead = (txt) => `<tr class="grid-sec"><td>${txt}</td>${periods.map(()=>"<td></td>").join("")}<td></td></tr>`;
+  const totalRow = (txt, arr, cls) => `<tr class="grid-tot ${cls}">
+    <td>${txt}</td>${arr.map(v=>`<td class="grid-num">${v?mc(Math.abs(v)):"·"}</td>`).join("")}
+    <td class="grid-num">${mc(Math.abs(arr.reduce((s,v)=>s+v,0)))}</td></tr>`;
+
+  const invRow = invCells.some(v=>v!==0) ? `<tr class="grid-inv">
+    <td>◆ Inversiones (no es gasto)</td>
+    ${invCells.map(v=>`<td class="grid-num ${v>0?'in':v<0?'inv':'muted'}">${v?(v>0?'+':'−')+mc(Math.abs(v)):"·"}</td>`).join("")}
+    <td class="grid-num">${mc(Math.abs(invCells.reduce((s,v)=>s+v,0)))}</td></tr>` : "";
+
+  const saldoRow = `<tr class="grid-saldo">
+    <td>Saldo al cierre</td>
+    ${saldos.map(v=>`<td class="grid-num ${v<0?'neg':''}">${mc(v)}</td>`).join("")}
+    <td class="grid-num">${mc(saldos[saldos.length-1]||0)}</td></tr>`;
+
+  const colHead = periods.map(p=>`<th class="grid-per">${p.label}</th>`).join("");
+
+  $("#cf-table").innerHTML = `
+    <div class="cf-table-scroll grid-scroll">
+      <table class="cf-grid">
+        <thead><tr>
+          <th class="grid-corner">${grain==="mes"?"Mes":"Semana"} →</th>
+          ${colHead}
+          <th class="grid-per grid-total-h">Total</th>
+        </tr></thead>
+        <tbody>
+          ${secHead("INGRESOS")}
+          ${ingresos.length ? ingresos.map(catRow).join("") : `<tr><td class="grid-catname muted">Sin ingresos</td>${periods.map(()=>'<td class="grid-num muted">·</td>').join("")}<td></td></tr>`}
+          ${totalRow("Total ingresos", totInPos, "tot-in")}
+          ${secHead("EGRESOS")}
+          ${egresos.length ? egresos.map(catRow).join("") : `<tr><td class="grid-catname muted">Sin egresos</td>${periods.map(()=>'<td class="grid-num muted">·</td>').join("")}<td></td></tr>`}
+          ${totalRow("Total egresos", totOut, "tot-out")}
+          <tr class="grid-neto"><td>Flujo neto</td>${neto.map(v=>`<td class="grid-num ${v>0?'in':v<0?'out':''}">${v?(v>0?'+':'−')+mc(Math.abs(v)):"·"}</td>`).join("")}<td class="grid-num">${mc(neto.reduce((s,v)=>s+v,0))}</td></tr>
+          ${invRow}
+          ${saldoRow}
+        </tbody>
+      </table>
+    </div>
+    <div class="cf-table-foot"><span>${fmtDateShort(fromISO)} a ${fmtDateShort(toISO)} · saldo en rojo = descubierto · tocá una categoría para ver el detalle</span></div>`;
+
+  // Expandir categoría → mostrar movimientos individuales
+  $$(".grid-cat").forEach((row) => {
+    row.onclick = () => {
+      const cat = row.dataset.cat;
+      state.cfOpenCat = state.cfOpenCat === cat ? null : cat;
+      renderGridCatDetail(cat, periods, mc);
+    };
+  });
+  if (state.cfOpenCat) renderGridCatDetail(state.cfOpenCat, periods, mc);
+  wireExport();
+}
+
+// Inserta filas de detalle bajo una categoría abierta
+function renderGridCatDetail(cat, periods, mc) {
+  // Quitar detalle previo
+  $$(".grid-detail").forEach(r => r.remove());
+  $$(".grid-cat").forEach(r => {
+    const name = r.querySelector(".grid-catname");
+    if (name) name.textContent = (r.dataset.cat === state.cfOpenCat ? "▾ " : "▸ ") + catLabel(r.dataset.cat);
+  });
+  if (!state.cfOpenCat || state.cfOpenCat !== cat) return;
+  const row = $(`.grid-cat[data-cat="${cat}"]`);
+  if (!row) return;
+  const acctIds = new Set(state.accounts.filter(a =>
+    state.cfAccount ? a.id === state.cfAccount : a.moneda === state.cfCurrency).map(a=>a.id));
+  // Movimientos de esa categoría en el rango
+  const items = {};
+  state.movements.forEach((m, idx) => {
+    if (!m.amount || !m.date || !acctIds.has(m.account)) return;
+    if (m.movTipo === "inversion" || m.movTipo === "rescate") return;
+    if (movCategoria(m) !== cat) return;
+    const key = m.label || "(sin concepto)";
+    if (!items[key]) items[key] = { label: key, cells: periods.map(()=>0), idx };
+    // Expandir en el rango
+    const base = new Date(m.date+"T00:00:00");
+    const push = (d) => { const pi = periodIndex(periods, d.toISOString().slice(0,10)); if (pi>=0) items[key].cells[pi]+=m.amount; };
+    if (m.recurrence==="none") push(base);
+    else { let d=new Date(base),g=0; const end=periods[periods.length-1].end;
+      while(d<=end&&g<3000){push(d);
+        if(m.recurrence==="weekly")d.setDate(d.getDate()+7);
+        else if(m.recurrence==="quincenal")d.setDate(d.getDate()+14);
+        else if(m.recurrence==="monthly")d.setMonth(d.getMonth()+1);
+        else if(m.recurrence==="quarterly")d.setMonth(d.getMonth()+3);
+        else break; g++;} }
+  });
+  const detailHtml = Object.values(items).map(it =>
+    `<tr class="grid-detail"><td class="grid-detailname">${h(it.label)}</td>${it.cells.map(v=>`<td class="grid-num sm ${v>0?'in':v<0?'out':'muted'}">${v?mc(Math.abs(v)):"·"}</td>`).join("")}<td class="grid-num sm">${mc(Math.abs(it.cells.reduce((s,v)=>s+v,0)))}</td></tr>`
+  ).join("");
+  row.insertAdjacentHTML("afterend", detailHtml);
 }
 
 function renderTableDaily(days) {
@@ -1207,6 +1487,158 @@ function totalColocado(ccy) {
   return state.investments
     .filter((inv) => invActiva(inv) && inv.moneda === ccy)
     .reduce((s, inv) => s + (parseFloat(inv.monto) || 0), 0);
+}
+
+// ── Helper: saldo de una cuenta a una fecha (default hoy) ─
+function saldoCuentaAFecha(acc, hasta) {
+  const lim = hasta ? new Date(hasta + "T23:59:59") : (() => { const d = new Date(); d.setHours(23,59,59,999); return d; })();
+  let bal = parseFloat(acc.opening) || 0;
+  state.movements.forEach((m) => {
+    if (m.account !== acc.id || !m.amount || !m.date) return;
+    const base = new Date(m.date + "T00:00:00");
+    if (m.recurrence === "none") { if (base <= lim) bal += m.amount; }
+    else {
+      let d = new Date(base), g = 0;
+      while (d <= lim && g < 2000) {
+        bal += m.amount;
+        if (m.recurrence==="weekly") d.setDate(d.getDate()+7);
+        else if (m.recurrence==="quincenal") d.setDate(d.getDate()+14);
+        else if (m.recurrence==="monthly") d.setMonth(d.getMonth()+1);
+        else if (m.recurrence==="quarterly") d.setMonth(d.getMonth()+3);
+        else break; g++;
+      }
+    }
+  });
+  return bal;
+}
+
+// ═══ SALDOS (tablero consolidado) ════════════════════════
+function renderSaldos() {
+  const wrap = $("#saldos-wrap");
+  const monedas = [...new Set(state.accounts.map(a => a.moneda))];
+
+  // Saldo total por moneda + colocado
+  const bloqueMoneda = (ccy) => {
+    const accts = state.accounts.filter(a => a.moneda === ccy);
+    const liq = accts.reduce((s,a) => s + saldoCuentaAFecha(a), 0);
+    const col = totalColocado(ccy);
+    const total = liq + col;
+    const pctCol = total > 0 ? Math.round((col/total)*100) : 0;
+    return `
+      <div class="saldo-ccy-card">
+        <div class="saldo-ccy-head">
+          <span class="saldo-ccy-name">${ccy === "USD" ? "US$ Dólares" : "$ Pesos"}</span>
+          <span class="saldo-ccy-total">${moneyC(total, ccy)}</span>
+        </div>
+        <div class="saldo-split">
+          <div><small>Líquido</small><b>${moneyC(liq, ccy)}</b></div>
+          <div><small>Colocado</small><b class="col">${moneyC(col, ccy)}</b></div>
+        </div>
+        ${col > 0 ? `<div class="liq-bar"><div class="liq-fill-liq" style="width:${100-pctCol}%"></div><div class="liq-fill-col" style="width:${pctCol}%"></div></div>` : ""}
+      </div>`;
+  };
+
+  // Tabla de cuentas: saldo hoy + hace 30 días + variación
+  const hace30 = new Date(); hace30.setDate(hace30.getDate()-30);
+  const iso30 = hace30.toISOString().slice(0,10);
+  const filaCuenta = (a) => {
+    const hoy = saldoCuentaAFecha(a);
+    const antes = saldoCuentaAFecha(a, iso30);
+    const vari = hoy - antes;
+    return `<tr>
+      <td class="sc-name"><b>${h(a.name)}</b><small>${a.tipo === "efectivo" ? "Efectivo" : h(bancoShort(a.banco)) + " · " + tipoLabel(a.tipo)}</small></td>
+      <td class="mono">${moneyC(antes, a.moneda)}</td>
+      <td class="mono ${hoy < 0 ? "neg" : ""}">${moneyC(hoy, a.moneda)}</td>
+      <td class="mono ${vari > 0 ? "in" : vari < 0 ? "out" : "muted"}">${vari ? (vari>0?"+":"−") + moneyC(Math.abs(vari), a.moneda) : "—"}</td>
+    </tr>`;
+  };
+
+  // Estado de conciliación (informativo: cuántos movimientos hay cargados)
+  const nMovs = state.movements.filter(m => !m.movTipo).length;
+  const nInvs = state.investments.filter(invActiva).length;
+
+  wrap.innerHTML = `
+    <div class="inv-head">
+      <div>
+        <div class="eyebrow">Tesorería</div>
+        <h2 class="inv-title">Saldos</h2>
+        <p class="inv-sub">Tu posición completa: cuánto tenés en cada cuenta, cómo evolucionó, y cuánto está líquido vs invertido.</p>
+      </div>
+    </div>
+
+    <div class="saldos-ccy-row">
+      ${monedas.map(bloqueMoneda).join("")}
+    </div>
+
+    <div class="table-card" style="margin-top:20px">
+      <div class="chart-head"><h2>Saldo por cuenta</h2></div>
+      <div class="cf-table-scroll">
+        <table class="cf-table">
+          <thead><tr><th>Cuenta</th><th>Hace 30 días</th><th>Saldo hoy</th><th>Variación</th></tr></thead>
+          <tbody>${state.accounts.map(filaCuenta).join("")}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="saldos-chart-card table-card" style="margin-top:16px">
+      <div class="chart-head"><h2>Evolución del saldo total</h2></div>
+      <div id="saldos-chart"></div>
+    </div>
+
+    <div class="saldos-info-row">
+      <div class="saldos-info-card">
+        <div class="si-num">${nMovs}</div>
+        <div class="si-label">Movimientos cargados</div>
+      </div>
+      <div class="saldos-info-card">
+        <div class="si-num">${nInvs}</div>
+        <div class="si-label">Inversiones activas</div>
+      </div>
+      <div class="saldos-info-card link" id="saldos-to-concil">
+        <div class="si-num">→</div>
+        <div class="si-label">Conciliar con el banco</div>
+      </div>
+    </div>`;
+
+  // Gráfico de evolución del saldo total (últimos 90 + próximos 90)
+  renderSaldosChart();
+  $("#saldos-to-concil")?.addEventListener("click", () => switchView("conciliacion"));
+}
+
+function renderSaldosChart() {
+  const host = $("#saldos-chart");
+  if (!host) return;
+  // Serie de saldo total consolidado (ARS) de -60 a +90 días
+  const today = new Date();
+  const from = new Date(today); from.setDate(from.getDate()-60);
+  const to = new Date(today); to.setDate(to.getDate()+90);
+  const prevCcy = state.cfCurrency, prevAcct = state.cfAccount;
+  state.cfCurrency = "ARS"; state.cfAccount = "";
+  const days = computeDaySeries(from.toISOString().slice(0,10), to.toISOString().slice(0,10));
+  state.cfCurrency = prevCcy; state.cfAccount = prevAcct;
+  if (!days.length) { host.innerHTML = ""; return; }
+
+  const W = 900, H = 260, P = { t: 16, r: 16, b: 28, l: 64 };
+  const iw = W-P.l-P.r, ih = H-P.t-P.b;
+  const bals = days.map(d=>d.balance);
+  let ymin = Math.min(0,...bals), ymax = Math.max(...bals,0);
+  const pad = (ymax-ymin)*0.1 || 1000; ymin-=pad; ymax+=pad;
+  const X = (i) => P.l + (i/(days.length-1))*iw;
+  const Y = (v) => P.t + ih - ((v-ymin)/(ymax-ymin))*ih;
+  const todayIdx = days.findIndex(d => d.date === today.toISOString().slice(0,10));
+  const pts = days.map((d,i)=>`${X(i).toFixed(1)},${Y(d.balance).toFixed(1)}`).join(" ");
+  const area = `${P.l},${Y(ymin).toFixed(1)} ${pts} ${(P.l+iw).toFixed(1)},${Y(ymin).toFixed(1)}`;
+  const zeroY = Y(0).toFixed(1);
+  const todayX = todayIdx >= 0 ? X(todayIdx).toFixed(1) : null;
+
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="saldos-svg">
+    <polygon points="${area}" fill="rgba(76,141,255,.10)"/>
+    <line x1="${P.l}" y1="${zeroY}" x2="${P.l+iw}" y2="${zeroY}" stroke="#E45858" stroke-dasharray="4 4" stroke-width="1"/>
+    ${todayX ? `<line x1="${todayX}" y1="${P.t}" x2="${todayX}" y2="${P.t+ih}" stroke="#94A3B8" stroke-dasharray="3 3" stroke-width="1"/><text x="${todayX}" y="${P.t-4}" fill="#64748B" font-size="10" text-anchor="middle">hoy</text>` : ""}
+    <polyline points="${pts}" fill="none" stroke="#4C8DFF" stroke-width="2"/>
+    <text x="4" y="${Y(ymax).toFixed(1)}" fill="#94A3B8" font-size="10">${money(ymax)}</text>
+    <text x="4" y="${Y(ymin).toFixed(1)+10}" fill="#94A3B8" font-size="10">${money(ymin)}</text>
+  </svg>`;
 }
 
 function renderCartera() {
@@ -2690,6 +3122,7 @@ function switchView(view) {
 
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${view}`).classList.remove("hidden");
+  if (view === "saldos") renderSaldos();
   if (view === "cartera") renderCartera();
   if (view === "inversiones") renderInversiones();
   if (view === "divisas") renderDivisas();
@@ -2820,10 +3253,23 @@ function init() {
   }
 
   // Toggle día / semana en la tabla
-  $$(".vt-btn").forEach((b) =>
+  // Toggle de modo (grilla / detalle)
+  $$(".mode-toggle .vt-btn").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.cfMode = b.dataset.cfmode;
+      $$(".mode-toggle .vt-btn").forEach((x) => x.classList.toggle("active", x.dataset.cfmode === state.cfMode));
+      // El grano "día" solo aplica al detalle; en grilla forzamos semana
+      const grainBtns = $$("#grain-toggle .vt-btn");
+      const diaBtn = grainBtns.find(x => x.dataset.cfgrain === "dia");
+      if (diaBtn) diaBtn.style.display = state.cfMode === "grilla" ? "none" : "";
+      renderCashflowTable();
+    })
+  );
+  // Toggle de grano (día / semana / mes)
+  $$("#grain-toggle .vt-btn").forEach((b) =>
     b.addEventListener("click", () => {
       state.cfGrain = b.dataset.cfgrain;
-      $$(".vt-btn").forEach((x) => x.classList.toggle("active", x.dataset.cfgrain === state.cfGrain));
+      $$("#grain-toggle .vt-btn").forEach((x) => x.classList.toggle("active", x.dataset.cfgrain === state.cfGrain));
       renderCashflowTable();
     })
   );
