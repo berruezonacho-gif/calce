@@ -20,8 +20,11 @@
       <span class="brand-name">Calce</span>
     </div>
     <nav class="topnav">
-      <button class="nav-item active" data-view="flujo">Flujo de caja</button>
-      <button class="nav-item" data-view="saldos">Saldos</button>
+      <button class="nav-item active" data-view="dashboard">Inicio</button>
+      <button class="nav-item" data-view="flujo">Flujo de caja</button>
+      <button class="nav-item" data-view="saldos">Posición de caja</button>
+      <button class="nav-item" data-view="comprobantes">Cobranzas y Pagos</button>
+      <button class="nav-item" data-view="escenarios">Escenarios</button>
       <div class="nav-dropdown">
         <button class="nav-item nav-drop-btn" data-group="inversiones">Inversiones <span class="caret">▾</span></button>
         <div class="nav-menu">
@@ -40,8 +43,13 @@
   </header>
 
   <main class="main" id="main">
+    <!-- Vista Inicio / Dashboard -->
+    <section class="view" id="view-dashboard">
+      <div class="dash-wrap" id="dash-wrap"></div>
+    </section>
+
     <!-- Vista Flujo de caja -->
-    <section class="view" id="view-flujo">
+    <section class="view hidden" id="view-flujo">
 
       <div class="board">
         <!-- Panel de control izquierdo -->
@@ -130,6 +138,16 @@
     <!-- Vista Saldos (tablero de saldos, evolución, líquido vs colocado, conciliación) -->
     <section class="view hidden" id="view-saldos">
       <div class="saldos-wrap" id="saldos-wrap"></div>
+    </section>
+
+    <!-- Vista Cobranzas y Pagos (AR/AP) -->
+    <section class="view hidden" id="view-comprobantes">
+      <div class="comp-wrap" id="comp-wrap"></div>
+    </section>
+
+    <!-- Vista Escenarios (What-If) -->
+    <section class="view hidden" id="view-escenarios">
+      <div class="esc-wrap" id="esc-wrap"></div>
     </section>
 
     <!-- Vista Excedente -->
@@ -333,6 +351,54 @@
       <div class="modal-foot">
         <button class="btn-ghost" id="inv-modal-cancel">Cancelar</button>
         <button class="btn-primary" id="inv-modal-save">Registrar inversión</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: nueva factura / comprobante (cobrar o pagar) -->
+  <div class="modal-overlay hidden" id="comp-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="comp-modal-title">Nueva factura</h3>
+        <button class="modal-close" id="comp-modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="mov-mode-tabs">
+          <button class="comp-mode active" data-ctipo="cobrar">Factura a cobrar</button>
+          <button class="comp-mode" data-ctipo="pagar">Factura a pagar</button>
+        </div>
+        <div class="modal-row">
+          <label class="field"><span id="c-contra-label">Cliente</span>
+            <input type="text" id="c-contraparte" placeholder="Ej: Municipalidad de La Plata">
+          </label>
+          <label class="field"><span>N° de comprobante</span>
+            <input type="text" id="c-numero" placeholder="Ej: A-0001-00012345">
+          </label>
+        </div>
+        <div class="modal-row">
+          <label class="field"><span>Monto</span>
+            <div class="money-input"><em id="c-cur">$</em><input type="number" id="c-monto" placeholder="0" step="1000"></div>
+          </label>
+          <label class="field"><span>Cuenta destino</span>
+            <select id="c-account"></select>
+          </label>
+        </div>
+        <div class="modal-row">
+          <label class="field"><span>Fecha de emisión</span>
+            <input type="date" id="c-emision">
+          </label>
+          <label class="field"><span>Fecha de vencimiento</span>
+            <input type="date" id="c-vencimiento">
+          </label>
+        </div>
+        <label class="field"><span>Categoría</span>
+          <select id="c-categoria"></select>
+        </label>
+        <p class="modal-note" id="c-note">La factura impacta tu flujo de caja proyectado en la fecha de vencimiento. Cuando la cobrás, la marcás como saldada.</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-ghost" id="comp-modal-cancel">Cancelar</button>
+        <button class="btn-primary" id="comp-modal-save">Guardar factura</button>
       </div>
     </div>
   </div>

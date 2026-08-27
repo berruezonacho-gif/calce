@@ -18,6 +18,7 @@ const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<"
 const state = {
   movements: [],
   investments: [], // colocaciones (plazo fijo, FCI, USD, bonos, caución)
+  comprobantes: [], // facturas a cobrar (AR) y a pagar (AP)
   accounts: [
     { id: "efectivo", name: "Caja / Efectivo", banco: "", tipo: "efectivo", moneda: "ARS", alias: "", opening: 300000 },
     { id: "banco", name: "Cuenta principal", banco: "Banco de la Nación Argentina", tipo: "cc", moneda: "ARS", alias: "", opening: 500000 },
@@ -110,6 +111,47 @@ function movCategoria(m) {
   return clasificarCategoria(m.label, m.amount);
 }
 
+// ── Comprobantes: cobranzas (AR) y pagos (AP) ────────────
+function compId() { return "cmp" + Date.now().toString(36) + Math.random().toString(36).slice(2,5); }
+
+// Días de atraso respecto de hoy (positivo = vencido hace N días)
+function diasAtraso(comp) {
+  const venc = new Date(comp.vencimiento + "T00:00:00");
+  const hoy = new Date(new Date().toISOString().slice(0,10) + "T00:00:00");
+  return Math.round((hoy - venc) / 86400000);
+}
+// Estado efectivo: saldado / vencido / por-vencer / pendiente
+function estadoComp(comp) {
+  if (comp.estado === "saldado") return "saldado";
+  const d = diasAtraso(comp);
+  if (d > 0) return "vencido";
+  if (d >= -7) return "por_vencer";
+  return "pendiente";
+}
+// Buckets de aging (antigüedad de la deuda vencida)
+function agingBucket(dias) {
+  if (dias <= 0) return "corriente";
+  if (dias <= 30) return "1-30";
+  if (dias <= 60) return "31-60";
+  if (dias <= 90) return "61-90";
+  return "90+";
+}
+const AGING_LABELS = { corriente: "Por vencer", "1-30": "1-30 días", "31-60": "31-60 días", "61-90": "61-90 días", "90+": "+90 días" };
+
+// DSO simplificado: (cuentas por cobrar pendientes / ventas del período) × días
+function calcularDSO(tipo, dias = 90) {
+  const pend = state.comprobantes.filter(c => c.tipo === tipo && c.estado !== "saldado");
+  const totalPend = pend.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+  const hoy = new Date();
+  const desde = new Date(hoy); desde.setDate(desde.getDate()-dias);
+  // Ventas/compras del período (emitidas en la ventana)
+  const emitidos = state.comprobantes.filter(c => c.tipo === tipo &&
+    new Date(c.emision+"T00:00:00") >= desde);
+  const totalEmitido = emitidos.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+  if (totalEmitido <= 0) return null;
+  return Math.round((totalPend / totalEmitido) * dias);
+}
+
 // ── Persistencia (autoguardado en el navegador) ──────────
 const STORE_KEY = "calce.state.v1";
 let _saveTimer = null;
@@ -121,6 +163,7 @@ function saveState() {
       const snapshot = {
         movements: state.movements,
         investments: state.investments,
+        comprobantes: state.comprobantes,
         accounts: state.accounts,
         empresa: state.empresa,
         prefs: state.prefs,
@@ -139,6 +182,7 @@ function loadState() {
     const s = JSON.parse(raw);
     if (s.movements) state.movements = s.movements;
     if (s.investments) state.investments = s.investments;
+    if (s.comprobantes) state.comprobantes = s.comprobantes;
     if (s.accounts) state.accounts = s.accounts;
     if (s.empresa) state.empresa = s.empresa;
     if (s.prefs) state.prefs = s.prefs;
@@ -399,6 +443,22 @@ function loadDemoDataset(ds) {
         invId: inv.id, movTipo: "rescate",
       });
     }
+  });
+
+  // Comprobantes del demo: traducir fechas y generar sus movimientos
+  state.comprobantes = [];
+  (ds.comprobantes || []).forEach((raw) => {
+    const comp = {
+      id: compId(), tipo: raw.tipo, contraparte: raw.contraparte,
+      numero: raw.numero || "", monto: raw.monto,
+      moneda: (state.accounts.find(a => a.id === raw.account)?.moneda) || "ARS",
+      account: raw.account,
+      emision: relDate(raw.emision), vencimiento: relDate(raw.vencimiento),
+      categoria: raw.categoria, estado: raw.estado || "pendiente",
+      fechaSaldado: raw.fechaSaldado ? relDate(raw.fechaSaldado) : null,
+    };
+    state.comprobantes.push(comp);
+    generarMovComprobante(comp);
   });
 }
 
@@ -1512,6 +1572,584 @@ function saldoCuentaAFecha(acc, hasta) {
   return bal;
 }
 
+// ═══ ESCENARIOS (What-If) ════════════════════════════════
+// Palancas del escenario activo (no se guardan; análisis puro)
+const escenario = {
+  ventasPct: 0,      // % variación de ingresos (cobranzas/ventas)
+  gastosPct: 0,      // % variación de egresos operativos
+  dolarPct: 0,       // % variación del dólar (afecta cuentas/mov USD)
+  retrasoCobros: 0,  // días de retraso en las cobranzas
+  retrasoPagos: 0,   // días de corrimiento de los pagos
+};
+
+// Aplica las palancas a una copia de los movimientos y devuelve la serie diaria
+function simularSerie(fromISO, toISO, esc) {
+  const origMovs = state.movements;
+  // Copia profunda con las palancas aplicadas
+  const simMovs = state.movements.map((m) => {
+    const nm = { ...m };
+    const cat = movCategoria(m);
+    const esIngreso = m.amount > 0;
+    const esInversion = m.movTipo === "inversion" || m.movTipo === "rescate";
+    if (!esInversion) {
+      // Variación de ventas/ingresos
+      if (esIngreso && esc.ventasPct) nm.amount = m.amount * (1 + esc.ventasPct/100);
+      // Variación de gastos/egresos
+      if (!esIngreso && esc.gastosPct) nm.amount = m.amount * (1 + esc.gastosPct/100);
+      // Retraso de cobranzas (ingresos futuros se corren)
+      if (esIngreso && esc.retrasoCobros && (m.movTipo === "cobranza" || cat === "ventas" || cat === "certificaciones" || cat === "anticipos")) {
+        nm.date = addDaysToISO(m.date, esc.retrasoCobros);
+      }
+      // Retraso de pagos
+      if (!esIngreso && esc.retrasoPagos && (m.movTipo === "pago" || catFlujo(cat) === "out")) {
+        nm.date = addDaysToISO(m.date, esc.retrasoPagos);
+      }
+    }
+    // Variación del dólar: afecta movimientos de cuentas USD
+    const acc = state.accounts.find(a => a.id === m.account);
+    if (acc && acc.moneda === "USD" && esc.dolarPct) {
+      nm.amount = m.amount * (1 + esc.dolarPct/100);
+    }
+    return nm;
+  });
+  // Sustituir temporalmente y calcular
+  state.movements = simMovs;
+  const serie = computeDaySeries(fromISO, toISO);
+  state.movements = origMovs;
+  return serie;
+}
+
+function addDaysToISO(iso, days) {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0,10);
+}
+
+function renderEscenarios() {
+  const wrap = $("#esc-wrap");
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const iso = (d) => d.toISOString().slice(0,10);
+  const to = new Date(hoy); to.setDate(to.getDate()+90);
+
+  wrap.innerHTML = `
+    <div class="inv-head">
+      <div>
+        <div class="eyebrow">Tesorería</div>
+        <h2 class="inv-title">Escenarios ¿qué pasaría si...?</h2>
+        <p class="inv-sub">Simulá situaciones sin tocar tus datos reales. Movés las palancas y ves el impacto en tu caja de los próximos 90 días.</p>
+      </div>
+      <button class="btn-ghost" id="esc-reset">Reiniciar</button>
+    </div>
+
+    <div class="esc-presets">
+      <button class="esc-preset" data-preset="dolar">📈 Sube el dólar 20%</button>
+      <button class="esc-preset" data-preset="ventas">📉 Caen las ventas 15%</button>
+      <button class="esc-preset" data-preset="cobros">⏳ Cobros +15 días</button>
+      <button class="esc-preset" data-preset="crisis">🔥 Escenario adverso</button>
+    </div>
+
+    <div class="esc-board">
+      <aside class="esc-controls ctrl-card">
+        <h3>Palancas</h3>
+        ${palancaHTML("ventasPct", "Ventas / cobranzas", "%", -50, 50)}
+        ${palancaHTML("gastosPct", "Gastos / egresos", "%", -50, 50)}
+        ${palancaHTML("dolarPct", "Cotización del dólar", "%", -30, 100)}
+        ${palancaHTML("retrasoCobros", "Retraso en cobros", "días", 0, 90)}
+        ${palancaHTML("retrasoPagos", "Corrimiento de pagos", "días", 0, 90)}
+      </aside>
+      <div class="esc-result">
+        <div class="esc-compare" id="esc-compare"></div>
+        <div class="chart-card" style="margin-top:16px">
+          <div class="chart-head"><h2>Base vs. escenario</h2>
+            <div class="chart-legend"><span class="lg lg-balance">Base</span><span class="lg" style="color:#E65100">Escenario</span></div>
+          </div>
+          <div id="esc-chart"></div>
+        </div>
+      </div>
+    </div>`;
+
+  // Wiring palancas
+  $$(".esc-slider").forEach(sl => {
+    sl.addEventListener("input", () => {
+      escenario[sl.dataset.lever] = parseFloat(sl.value);
+      $(`#esc-val-${sl.dataset.lever}`).textContent = fmtLever(sl.dataset.lever, sl.value);
+      updateEscenario();
+    });
+  });
+  $$(".esc-preset").forEach(b => b.onclick = () => aplicarPreset(b.dataset.preset));
+  $("#esc-reset").onclick = () => { resetEscenario(); renderEscenarios(); };
+
+  updateEscenario();
+}
+
+function palancaHTML(lever, label, unidad, min, max) {
+  const val = escenario[lever];
+  return `<div class="esc-lever">
+    <div class="esc-lever-head"><span>${label}</span><b id="esc-val-${lever}">${fmtLever(lever, val)}</b></div>
+    <input type="range" class="esc-slider" data-lever="${lever}" min="${min}" max="${max}" step="${unidad==="días"?1:5}" value="${val}">
+  </div>`;
+}
+function fmtLever(lever, val) {
+  val = parseFloat(val);
+  if (lever.startsWith("retraso")) return val === 0 ? "sin cambio" : `+${val} días`;
+  return val === 0 ? "sin cambio" : `${val>0?"+":""}${val}%`;
+}
+
+function updateEscenario() {
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const iso = (d) => d.toISOString().slice(0,10);
+  const to = new Date(hoy); to.setDate(to.getDate()+90);
+  const prevCcy = state.cfCurrency, prevAcct = state.cfAccount;
+  state.cfCurrency = "ARS"; state.cfAccount = "";
+  const base = computeDaySeries(iso(hoy), iso(to));
+  const sim = simularSerie(iso(hoy), iso(to), escenario);
+  state.cfCurrency = prevCcy; state.cfAccount = prevAcct;
+
+  // Métricas comparadas
+  const finBase = base.length ? base[base.length-1].balance : 0;
+  const finSim = sim.length ? sim[sim.length-1].balance : 0;
+  const pisoBase = base.reduce((m,d)=>Math.min(m,d.balance), Infinity);
+  const pisoSim = sim.reduce((m,d)=>Math.min(m,d.balance), Infinity);
+  const primerRojoSim = sim.find(d=>d.balance<0);
+
+  const delta = finSim - finBase;
+  $("#esc-compare").innerHTML = `
+    <div class="esc-metric">
+      <small>Saldo a 90 días</small>
+      <div class="esc-metric-vals"><span class="base">${moneyC(finBase,"ARS")}</span><span class="arrow">→</span><b class="${finSim<0?'neg':'pos'}">${moneyC(finSim,"ARS")}</b></div>
+      <span class="esc-delta ${delta>=0?'up':'down'}">${delta>=0?"▲":"▼"} ${moneyC(Math.abs(delta),"ARS")}</span>
+    </div>
+    <div class="esc-metric">
+      <small>Piso de caja</small>
+      <div class="esc-metric-vals"><span class="base">${moneyC(pisoBase,"ARS")}</span><span class="arrow">→</span><b class="${pisoSim<0?'neg':'pos'}">${moneyC(pisoSim,"ARS")}</b></div>
+      ${primerRojoSim ? `<span class="esc-delta down">Descubierto el ${fmtDateShort(primerRojoSim.date)}</span>` : `<span class="esc-delta up">Sin descubierto</span>`}
+    </div>`;
+
+  renderEscChart(base, sim);
+}
+
+function renderEscChart(base, sim) {
+  const host = $("#esc-chart");
+  if (!host || !base.length) return;
+  const W=880, H=300, P={t:16,r:16,b:26,l:64};
+  const iw=W-P.l-P.r, ih=H-P.t-P.b;
+  const all=[...base.map(d=>d.balance),...sim.map(d=>d.balance)];
+  let ymin=Math.min(0,...all), ymax=Math.max(...all,0);
+  const pad=(ymax-ymin)*0.1||1000; ymin-=pad; ymax+=pad;
+  const X=(i,arr)=>P.l+(i/(arr.length-1))*iw;
+  const Y=(v)=>P.t+ih-((v-ymin)/(ymax-ymin))*ih;
+  const line=(arr)=>arr.map((d,i)=>`${X(i,arr).toFixed(1)},${Y(d.balance).toFixed(1)}`).join(" ");
+  const zeroY=Y(0).toFixed(1);
+  host.innerHTML=`<svg viewBox="0 0 ${W} ${H}" class="dash-svg">
+    <line x1="${P.l}" y1="${zeroY}" x2="${P.l+iw}" y2="${zeroY}" stroke="#E45858" stroke-dasharray="4 4" stroke-width="1"/>
+    <polyline points="${line(base)}" fill="none" stroke="#4C8DFF" stroke-width="2" opacity="0.55"/>
+    <polyline points="${line(sim)}" fill="none" stroke="#E65100" stroke-width="2.5"/>
+    <text x="4" y="${Y(ymax).toFixed(1)+4}" fill="#94A3B8" font-size="10">${money(ymax)}</text>
+    <text x="4" y="${zeroY}" fill="#E45858" font-size="9">0</text>
+    <text x="4" y="${Y(ymin).toFixed(1)}" fill="#94A3B8" font-size="10">${money(ymin)}</text>
+  </svg>`;
+}
+
+function aplicarPreset(preset) {
+  resetEscenario();
+  if (preset === "dolar") escenario.dolarPct = 20;
+  else if (preset === "ventas") escenario.ventasPct = -15;
+  else if (preset === "cobros") escenario.retrasoCobros = 15;
+  else if (preset === "crisis") { escenario.ventasPct = -20; escenario.gastosPct = 10; escenario.retrasoCobros = 20; escenario.dolarPct = 30; }
+  renderEscenarios();
+}
+function resetEscenario() {
+  escenario.ventasPct = 0; escenario.gastosPct = 0; escenario.dolarPct = 0;
+  escenario.retrasoCobros = 0; escenario.retrasoPagos = 0;
+}
+
+// ═══ DASHBOARD (Inicio) + motor de alertas ══════════════
+// Motor de alertas: revisa el estado y devuelve avisos priorizados
+function generarAlertas() {
+  const alertas = [];
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const iso = (d) => d.toISOString().slice(0,10);
+
+  // 1) Saldo proyectado que entra en rojo (próximos 90 días, ARS)
+  const prevCcy = state.cfCurrency, prevAcct = state.cfAccount;
+  state.cfCurrency = "ARS"; state.cfAccount = "";
+  const to = new Date(hoy); to.setDate(to.getDate()+90);
+  const serie = computeDaySeries(iso(hoy), iso(to));
+  state.cfCurrency = prevCcy; state.cfAccount = prevAcct;
+  const primerRojo = serie.find(d => d.balance < 0);
+  if (primerRojo) {
+    const dias = Math.round((new Date(primerRojo.date+"T00:00:00") - hoy)/86400000);
+    alertas.push({
+      nivel: "critico", icono: "▼",
+      titulo: "Vas a quedar en descubierto",
+      detalle: `El ${fmtDateFull(primerRojo.date)}${dias===0?" (hoy)":` (en ${dias} días)`} tu saldo proyectado cae a ${moneyC(primerRojo.balance,"ARS")}.`,
+      accion: "flujo",
+    });
+  }
+
+  // 2) Facturas vencidas (por cobrar y por pagar)
+  const cobrarVenc = state.comprobantes.filter(c => c.tipo==="cobrar" && c.estado!=="saldado" && diasAtraso(c)>0);
+  if (cobrarVenc.length) {
+    const total = cobrarVenc.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+    alertas.push({
+      nivel: "alto", icono: "⏰",
+      titulo: `${cobrarVenc.length} cobranza${cobrarVenc.length>1?"s":""} vencida${cobrarVenc.length>1?"s":""}`,
+      detalle: `Te deben ${moneyC(total,"ARS")} de facturas ya vencidas. La más atrasada: ${cobrarVenc.sort((a,b)=>diasAtraso(b)-diasAtraso(a))[0].contraparte}.`,
+      accion: "comprobantes",
+    });
+  }
+  const pagarVenc = state.comprobantes.filter(c => c.tipo==="pagar" && c.estado!=="saldado" && diasAtraso(c)>0);
+  if (pagarVenc.length) {
+    const total = pagarVenc.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+    alertas.push({
+      nivel: "alto", icono: "⏰",
+      titulo: `${pagarVenc.length} pago${pagarVenc.length>1?"s":""} vencido${pagarVenc.length>1?"s":""}`,
+      detalle: `Debés ${moneyC(total,"ARS")} de facturas ya vencidas a proveedores.`,
+      accion: "comprobantes",
+    });
+  }
+
+  // 3) Vencimientos próximos (7 días) — cobros y pagos
+  const prox = state.comprobantes.filter(c => c.estado!=="saldado" && diasAtraso(c)<=0 && diasAtraso(c)>=-7);
+  if (prox.length) {
+    const cobros = prox.filter(c=>c.tipo==="cobrar").reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+    const pagos = prox.filter(c=>c.tipo==="pagar").reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+    let det = [];
+    if (cobros) det.push(`cobrás ${moneyC(cobros,"ARS")}`);
+    if (pagos) det.push(`pagás ${moneyC(pagos,"ARS")}`);
+    alertas.push({
+      nivel: "medio", icono: "📅",
+      titulo: `${prox.length} vencimiento${prox.length>1?"s":""} esta semana`,
+      detalle: `En los próximos 7 días ${det.join(" y ")}.`,
+      accion: "comprobantes",
+    });
+  }
+
+  // 4) Concentración de pagos: un día con egresos > 40% del saldo actual
+  const saldoHoy = serie.length ? serie[0].balance : 0;
+  const egresosPorDia = {};
+  serie.forEach(d => { if (d.outflow > 0) egresosPorDia[d.date] = d.outflow; });
+  const diaPico = Object.entries(egresosPorDia).sort((a,b)=>b[1]-a[1])[0];
+  if (diaPico && saldoHoy > 0 && diaPico[1] > saldoHoy * 0.4) {
+    alertas.push({
+      nivel: "medio", icono: "◆",
+      titulo: "Concentración de pagos",
+      detalle: `El ${fmtDateFull(diaPico[0])} tenés que pagar ${moneyC(diaPico[1],"ARS")} — más del 40% de tu saldo actual. Revisá si podés diferir algo.`,
+      accion: "comprobantes",
+    });
+  }
+
+  // Orden por nivel
+  const peso = { critico: 0, alto: 1, medio: 2 };
+  return alertas.sort((a,b)=>peso[a.nivel]-peso[b.nivel]);
+}
+
+function renderDashboard() {
+  const wrap = $("#dash-wrap");
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const iso = (d) => d.toISOString().slice(0,10);
+
+  // Datos consolidados ARS
+  const prevCcy = state.cfCurrency, prevAcct = state.cfAccount;
+  state.cfCurrency = "ARS"; state.cfAccount = "";
+  const to30 = new Date(hoy); to30.setDate(to30.getDate()+30);
+  const serie30 = computeDaySeries(iso(hoy), iso(to30));
+  state.cfCurrency = prevCcy; state.cfAccount = prevAcct;
+
+  const liquidoARS = state.accounts.filter(a=>a.moneda==="ARS").reduce((s,a)=>s+saldoCuentaAFecha(a),0);
+  const colocadoARS = totalColocado("ARS");
+  const saldoFin30 = serie30.length ? serie30[serie30.length-1].balance : liquidoARS;
+  const pisoMin = serie30.reduce((m,d)=>Math.min(m,d.balance), liquidoARS);
+  const porCobrar = state.comprobantes.filter(c=>c.tipo==="cobrar"&&c.estado!=="saldado").reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+  const porPagar = state.comprobantes.filter(c=>c.tipo==="pagar"&&c.estado!=="saldado").reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+
+  const alertas = generarAlertas();
+  const nivelClass = { critico: "al-crit", alto: "al-alto", medio: "al-medio" };
+
+  const empresa = state.empresa.nombre || "Tu empresa";
+
+  wrap.innerHTML = `
+    <div class="dash-head">
+      <div>
+        <div class="eyebrow">Tesorería · ${h(empresa)}</div>
+        <h2 class="inv-title">Inicio</h2>
+      </div>
+      <div class="dash-date">${new Date().toLocaleDateString("es-AR",{weekday:"long",day:"numeric",month:"long"})}</div>
+    </div>
+
+    ${alertas.length ? `<div class="dash-alertas">
+      ${alertas.map(a=>`<div class="dash-alerta ${nivelClass[a.nivel]}" data-goto="${a.accion}">
+        <span class="al-icono">${a.icono}</span>
+        <div class="al-body"><b>${a.titulo}</b><span>${a.detalle}</span></div>
+        <span class="al-arrow">→</span>
+      </div>`).join("")}
+    </div>` : `<div class="dash-ok">✓ Todo en orden. No hay alertas de tesorería.</div>`}
+
+    <div class="dash-kpis">
+      <div class="dash-kpi hero">
+        <div class="dk-label">Líquido hoy</div>
+        <div class="dk-value">${moneyC(liquidoARS,"ARS")}</div>
+        <div class="dk-sub">Disponible ahora en pesos</div>
+      </div>
+      <div class="dash-kpi">
+        <div class="dk-label">Colocado</div>
+        <div class="dk-value inv">${moneyC(colocadoARS,"ARS")}</div>
+        <div class="dk-sub">Invertido · vuelve con rendimiento</div>
+      </div>
+      <div class="dash-kpi">
+        <div class="dk-label">Saldo proyectado (30d)</div>
+        <div class="dk-value ${saldoFin30<0?"neg":"pos"}">${moneyC(saldoFin30,"ARS")}</div>
+        <div class="dk-sub">Piso del mes: ${moneyC(pisoMin,"ARS")}</div>
+      </div>
+    </div>
+
+    <div class="dash-grid">
+      <div class="dash-card">
+        <div class="dash-card-head"><h3>Flujo proyectado · 30 días</h3><button class="cf-link" data-goto="flujo">Ver detalle →</button></div>
+        <div id="dash-chart"></div>
+      </div>
+      <div class="dash-card">
+        <div class="dash-card-head"><h3>Cobranzas y pagos</h3><button class="cf-link" data-goto="comprobantes">Ver todo →</button></div>
+        <div class="dash-cp">
+          <div class="dash-cp-item in">
+            <small>Por cobrar</small>
+            <b>${moneyC(porCobrar,"ARS")}</b>
+          </div>
+          <div class="dash-cp-item out">
+            <small>Por pagar</small>
+            <b>${moneyC(porPagar,"ARS")}</b>
+          </div>
+          <div class="dash-cp-item ${porCobrar-porPagar>=0?"net-pos":"net-neg"}">
+            <small>Neto pendiente</small>
+            <b>${moneyC(porCobrar-porPagar,"ARS")}</b>
+          </div>
+        </div>
+        <div class="dash-cp-bar">
+          <div class="cp-bar-in" style="width:${porCobrar+porPagar>0?Math.round(porCobrar/(porCobrar+porPagar)*100):50}%"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dash-quick">
+      <button class="dash-quick-btn" data-goto="flujo">📊 Flujo de caja</button>
+      <button class="dash-quick-btn" data-goto="saldos">🏦 Posición de caja</button>
+      <button class="dash-quick-btn" data-goto="comprobantes">📄 Cobranzas y Pagos</button>
+      <button class="dash-quick-btn" data-goto="cartera">◆ Mis inversiones</button>
+    </div>`;
+
+  // Mini-gráfico del flujo
+  renderDashChart(serie30);
+  // Wiring de navegación
+  $$("[data-goto]").forEach(el => el.addEventListener("click", () => switchView(el.dataset.goto)));
+}
+
+function renderDashChart(serie) {
+  const host = $("#dash-chart");
+  if (!host || !serie.length) { if(host) host.innerHTML=""; return; }
+  const W=680, H=180, P={t:12,r:12,b:22,l:56};
+  const iw=W-P.l-P.r, ih=H-P.t-P.b;
+  const bals=serie.map(d=>d.balance);
+  let ymin=Math.min(0,...bals), ymax=Math.max(...bals,0);
+  const pad=(ymax-ymin)*0.12||1000; ymin-=pad; ymax+=pad;
+  const X=(i)=>P.l+(i/(serie.length-1))*iw;
+  const Y=(v)=>P.t+ih-((v-ymin)/(ymax-ymin))*ih;
+  const pts=serie.map((d,i)=>`${X(i).toFixed(1)},${Y(d.balance).toFixed(1)}`).join(" ");
+  const area=`${P.l},${Y(ymin).toFixed(1)} ${pts} ${(P.l+iw).toFixed(1)},${Y(ymin).toFixed(1)}`;
+  const zeroY=Y(0).toFixed(1);
+  const neg = bals.some(v=>v<0);
+  host.innerHTML=`<svg viewBox="0 0 ${W} ${H}" class="dash-svg">
+    <polygon points="${area}" fill="${neg?'rgba(228,88,88,.08)':'rgba(76,141,255,.10)'}"/>
+    <line x1="${P.l}" y1="${zeroY}" x2="${P.l+iw}" y2="${zeroY}" stroke="#E45858" stroke-dasharray="4 4" stroke-width="1"/>
+    <polyline points="${pts}" fill="none" stroke="${neg?'#E45858':'#4C8DFF'}" stroke-width="2"/>
+    <text x="4" y="${Y(ymax).toFixed(1)+4}" fill="#94A3B8" font-size="10">${money(ymax)}</text>
+    <text x="4" y="${zeroY}" fill="#E45858" font-size="9">0</text>
+  </svg>`;
+}
+
+// ═══ COBRANZAS Y PAGOS (AR / AP) ═════════════════════════
+let compTab = "cobrar"; // pestaña activa
+
+function renderComprobantes() {
+  const wrap = $("#comp-wrap");
+  const tipo = compTab;
+  const esCobrar = tipo === "cobrar";
+  const comps = state.comprobantes.filter(c => c.tipo === tipo);
+  const pend = comps.filter(c => c.estado !== "saldado");
+
+  const totalPend = pend.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+  const vencidos = pend.filter(c => diasAtraso(c) > 0);
+  const totalVencido = vencidos.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+  const dso = calcularDSO(tipo);
+
+  const buckets = { corriente:0, "1-30":0, "31-60":0, "61-90":0, "90+":0 };
+  pend.forEach(c => { buckets[agingBucket(diasAtraso(c))] += (parseFloat(c.monto)||0); });
+  const ccyRef = pend[0]?.moneda || "ARS";
+  const maxBucket = Math.max(...Object.values(buckets), 1);
+
+  const estadoBadge = (c) => {
+    const e = estadoComp(c);
+    const map = { saldado:["Saldada","st-ok"], vencido:["Vencida","st-bad"], por_vencer:["Por vencer","st-warn"], pendiente:["Pendiente","st-neutral"] };
+    const [txt, cls] = map[e];
+    const d = diasAtraso(c);
+    const extra = e === "vencido" ? ` (${d}d)` : (e === "por_vencer" && d < 0 ? ` (en ${-d}d)` : "");
+    return `<span class="comp-badge ${cls}">${txt}${extra}</span>`;
+  };
+
+  const filaComp = (c) => `<tr class="comp-row" data-id="${c.id}">
+    <td class="comp-contra"><b>${h(c.contraparte || "—")}</b><small>${h(c.numero || "")}</small></td>
+    <td class="mono">${moneyC(c.monto, c.moneda)}</td>
+    <td>${fmtDateFull(c.emision)}</td>
+    <td>${fmtDateFull(c.vencimiento)}</td>
+    <td>${estadoBadge(c)}</td>
+    <td class="comp-actions">
+      ${c.estado !== "saldado" ? `<button class="comp-saldar-btn" data-saldar="${c.id}">${esCobrar ? "Cobré" : "Pagué"}</button>` : `<span class="muted">${fmtDateShort(c.fechaSaldado||"")}</span>`}
+      <button class="comp-del-btn" data-del="${c.id}" title="Eliminar">×</button>
+    </td>
+  </tr>`;
+
+  const orden = [...comps].sort((a,b) => {
+    if ((a.estado==="saldado") !== (b.estado==="saldado")) return a.estado==="saldado" ? 1 : -1;
+    return new Date(a.vencimiento) - new Date(b.vencimiento);
+  });
+
+  wrap.innerHTML = `
+    <div class="inv-head">
+      <div>
+        <div class="eyebrow">Tesorería</div>
+        <h2 class="inv-title">Cobranzas y Pagos</h2>
+        <p class="inv-sub">Administrá tus facturas por cobrar y por pagar, con vencimientos y antigüedad de deuda. Todo lo pendiente ya se refleja en tu flujo de caja proyectado.</p>
+      </div>
+      <button class="btn-primary" id="comp-add">+ Nueva factura</button>
+    </div>
+
+    <div class="comp-tabs">
+      <button class="comp-tab ${esCobrar?"active":""}" data-tab="cobrar">Por cobrar</button>
+      <button class="comp-tab ${!esCobrar?"active":""}" data-tab="pagar">Por pagar</button>
+    </div>
+
+    <div class="comp-kpis">
+      <div class="kpi"><div class="kpi-label">${esCobrar?"Total a cobrar":"Total a pagar"}</div><div class="kpi-value">${moneyC(totalPend, ccyRef)}</div><div class="kpi-sub">${pend.length} factura${pend.length!==1?"s":""} pendiente${pend.length!==1?"s":""}</div></div>
+      <div class="kpi"><div class="kpi-label">Vencido</div><div class="kpi-value ${totalVencido>0?"neg":""}">${moneyC(totalVencido, ccyRef)}</div><div class="kpi-sub">${vencidos.length} vencida${vencidos.length!==1?"s":""}</div></div>
+      <div class="kpi"><div class="kpi-label">${esCobrar?"DSO (días de cobro)":"DPO (días de pago)"}</div><div class="kpi-value">${dso!==null?dso+" días":"—"}</div><div class="kpi-sub">promedio del período</div></div>
+    </div>
+
+    <div class="table-card" style="margin-top:18px">
+      <div class="chart-head"><h2>Antigüedad de la deuda (aging)</h2></div>
+      <div class="aging-bars">
+        ${Object.keys(buckets).map(k => `
+          <div class="aging-col">
+            <div class="aging-bar-wrap"><div class="aging-bar ${k==='corriente'?'ok':(k==='90+'||k==='61-90'?'bad':'warn')}" style="height:${Math.round((buckets[k]/maxBucket)*100)}%"></div></div>
+            <div class="aging-val">${buckets[k]?moneyC(buckets[k],ccyRef):"·"}</div>
+            <div class="aging-lbl">${AGING_LABELS[k]}</div>
+          </div>`).join("")}
+      </div>
+    </div>
+
+    <div class="table-card" style="margin-top:16px">
+      <div class="chart-head"><h2>${esCobrar?"Facturas por cobrar":"Facturas por pagar"}</h2></div>
+      ${orden.length ? `<div class="cf-table-scroll"><table class="cf-table">
+        <thead><tr><th>${esCobrar?"Cliente":"Proveedor"}</th><th>Monto</th><th>Emisión</th><th>Vencimiento</th><th>Estado</th><th></th></tr></thead>
+        <tbody>${orden.map(filaComp).join("")}</tbody>
+      </table></div>` : `<p class="cf-empty">No hay facturas cargadas. Tocá "Nueva factura" para empezar.</p>`}
+    </div>`;
+
+  $$(".comp-tab").forEach(b => b.onclick = () => { compTab = b.dataset.tab; renderComprobantes(); });
+  $("#comp-add").onclick = () => openCompModal(compTab);
+  $$(".comp-saldar-btn").forEach(b => b.onclick = () => saldarComprobante(b.dataset.saldar));
+  $$(".comp-del-btn").forEach(b => b.onclick = () => eliminarComprobante(b.dataset.del));
+}
+
+let compModalTipo = "cobrar";
+function openCompModal(tipo) {
+  compModalTipo = tipo || "cobrar";
+  setCompMode(compModalTipo);
+  $("#c-contraparte").value = "";
+  $("#c-numero").value = "";
+  $("#c-monto").value = "";
+  $("#c-emision").value = new Date().toISOString().slice(0,10);
+  const v = new Date(); v.setDate(v.getDate()+30);
+  $("#c-vencimiento").value = v.toISOString().slice(0,10);
+  syncCompAccount();
+  syncCompCategoria();
+  $("#comp-modal").classList.remove("hidden");
+  setTimeout(()=>$("#c-contraparte").focus(), 50);
+}
+function closeCompModal() { $("#comp-modal").classList.add("hidden"); }
+function setCompMode(tipo) {
+  compModalTipo = tipo;
+  $$(".comp-mode").forEach(b => b.classList.toggle("active", b.dataset.ctipo === tipo));
+  $("#c-contra-label").textContent = tipo === "cobrar" ? "Cliente" : "Proveedor";
+  $("#comp-modal-title").textContent = tipo === "cobrar" ? "Nueva factura a cobrar" : "Nueva factura a pagar";
+  syncCompCategoria();
+}
+function syncCompAccount() {
+  $("#c-account").innerHTML = state.accounts.map(a =>
+    `<option value="${a.id}">${h(a.name)}${a.moneda==="USD"?" (USD)":""}</option>`).join("");
+  const acc = state.accounts.find(a=>a.id===$("#c-account").value);
+  $("#c-cur").textContent = acc && acc.moneda==="USD" ? "US$" : "$";
+}
+function syncCompCategoria() {
+  const flujo = compModalTipo === "cobrar" ? "in" : "out";
+  const cats = CATEGORIAS.filter(c => c.flujo === flujo);
+  $("#c-categoria").innerHTML = cats.map(c => `<option value="${c.v}">${c.label}</option>`).join("");
+}
+function saveCompFromModal() {
+  const contraparte = $("#c-contraparte").value.trim();
+  const monto = parseFloat($("#c-monto").value);
+  const account = $("#c-account").value;
+  const acc = state.accounts.find(a=>a.id===account);
+  if (!contraparte) { alert("Ingresá el nombre del cliente/proveedor."); return; }
+  if (!monto) { alert("Ingresá el monto."); return; }
+
+  const comp = {
+    id: compId(), tipo: compModalTipo, contraparte,
+    numero: $("#c-numero").value.trim(),
+    monto: Math.abs(monto), moneda: acc ? acc.moneda : "ARS", account,
+    emision: $("#c-emision").value, vencimiento: $("#c-vencimiento").value,
+    categoria: $("#c-categoria").value, estado: "pendiente",
+  };
+  state.comprobantes.push(comp);
+  generarMovComprobante(comp);
+  closeCompModal();
+  project();
+  switchView("comprobantes");
+}
+
+function generarMovComprobante(comp) {
+  state.movements = state.movements.filter(m => m.compId !== comp.id);
+  const signo = comp.tipo === "cobrar" ? 1 : -1;
+  const fecha = comp.estado === "saldado" ? (comp.fechaSaldado || comp.vencimiento) : comp.vencimiento;
+  state.movements.push({
+    label: `${comp.tipo === "cobrar" ? "Cobranza" : "Pago"}: ${comp.contraparte}${comp.numero ? " ("+comp.numero+")" : ""}`,
+    amount: signo * Math.abs(comp.monto),
+    date: fecha, recurrence: "none",
+    medio: "transferencia", account: comp.account,
+    categoria: comp.categoria,
+    compId: comp.id, movTipo: comp.tipo === "cobrar" ? "cobranza" : "pago",
+  });
+}
+
+function saldarComprobante(id) {
+  const comp = state.comprobantes.find(c => c.id === id);
+  if (!comp) return;
+  const hoy = new Date().toISOString().slice(0,10);
+  const txt = prompt(`Marcar como ${comp.tipo === "cobrar" ? "cobrada" : "pagada"}: ${comp.contraparte}\n\nFecha (dejá vacío = hoy):`, hoy);
+  if (txt === null) return;
+  comp.estado = "saldado";
+  comp.fechaSaldado = txt.trim() || hoy;
+  generarMovComprobante(comp);
+  project();
+  renderComprobantes();
+}
+
+function eliminarComprobante(id) {
+  if (!confirm("¿Eliminar esta factura? También se quita su movimiento del flujo.")) return;
+  state.comprobantes = state.comprobantes.filter(c => c.id !== id);
+  state.movements = state.movements.filter(m => m.compId !== id);
+  project();
+  renderComprobantes();
+}
+
 // ═══ SALDOS (tablero consolidado) ════════════════════════
 function renderSaldos() {
   const wrap = $("#saldos-wrap");
@@ -1561,7 +2199,7 @@ function renderSaldos() {
     <div class="inv-head">
       <div>
         <div class="eyebrow">Tesorería</div>
-        <h2 class="inv-title">Saldos</h2>
+        <h2 class="inv-title">Posición de caja</h2>
         <p class="inv-sub">Tu posición completa: cuánto tenés en cada cuenta, cómo evolucionó, y cuánto está líquido vs invertido.</p>
       </div>
     </div>
@@ -3122,7 +3760,10 @@ function switchView(view) {
 
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${view}`).classList.remove("hidden");
+  if (view === "dashboard") renderDashboard();
+  if (view === "escenarios") renderEscenarios();
   if (view === "saldos") renderSaldos();
+  if (view === "comprobantes") renderComprobantes();
   if (view === "cartera") renderCartera();
   if (view === "inversiones") renderInversiones();
   if (view === "divisas") renderDivisas();
@@ -3181,6 +3822,13 @@ function init() {
   $("#i-account").addEventListener("change", () => { updateInvTipo(); updateInvPreview(); });
   ["#i-monto","#i-rend","#i-fecha","#i-venc"].forEach(sel =>
     $(sel).addEventListener("input", updateInvPreview));
+
+  // Modal de comprobante (cobranzas/pagos)
+  $("#comp-modal-save").addEventListener("click", saveCompFromModal);
+  $("#comp-modal-close").addEventListener("click", closeCompModal);
+  $("#comp-modal-cancel").addEventListener("click", closeCompModal);
+  $$(".comp-mode").forEach(b => b.addEventListener("click", () => setCompMode(b.dataset.ctipo)));
+  $("#c-account").addEventListener("change", syncCompAccount);
 
   // Importar desde Excel/CSV
   $("#import-mov").addEventListener("click", () => $("#import-file").click());
@@ -3305,6 +3953,7 @@ function init() {
   if ($("#cf-to")) $("#cf-to").value = initRange.to;
 
   project();
+  renderDashboard();
 }
 
 function monthDay(day) {

@@ -97,4 +97,18 @@ const DEMO_CONSTRUCTORA = {
     // Dólares comprados con excedente (quedan en la cuenta USD)
     { tipo: "dolares", label: "Tenencia en dólares", monto: 4900, account: "usd-ca", fechaColocacion: "d-10", fechaVenc: null, rendimiento: 0, estado: "activa" },
   ],
+
+  // ── COBRANZAS Y PAGOS ────────────────────────────────────
+  comprobantes: [
+    // Por cobrar (certificaciones y anticipos de clientes)
+    { tipo: "cobrar", contraparte: "Municipalidad de La Plata", numero: "FC-A-0001-00012", monto: 22000000, account: "prov-cc", emision: "d-40", vencimiento: "d-10", categoria: "certificaciones", estado: "pendiente" },
+    { tipo: "cobrar", contraparte: "Gobierno de la Provincia", numero: "FC-A-0001-00018", monto: 18500000, account: "prov-cc", emision: "d-20", vencimiento: "d+10", categoria: "certificaciones", estado: "pendiente" },
+    { tipo: "cobrar", contraparte: "Consorcio Ruta 2", numero: "FC-A-0002-00005", monto: 8200000, account: "bna-cc", emision: "d-75", vencimiento: "d-45", categoria: "certificaciones", estado: "pendiente" },
+    { tipo: "cobrar", contraparte: "Desarrolladora del Sur", numero: "FC-B-0003-00021", monto: 5400000, account: "gali-ca", emision: "d-8", vencimiento: "d+22", categoria: "ventas", estado: "pendiente" },
+    // Por pagar (proveedores y subcontratistas)
+    { tipo: "pagar", contraparte: "Corralón El Constructor", numero: "FC-A-0044-00891", monto: 6800000, account: "bna-cc", emision: "d-25", vencimiento: "d-3", categoria: "materiales", estado: "pendiente" },
+    { tipo: "pagar", contraparte: "Hormigonera Platense", numero: "FC-A-0012-00340", monto: 4200000, account: "bna-cc", emision: "d-15", vencimiento: "d+7", categoria: "materiales", estado: "pendiente" },
+    { tipo: "pagar", contraparte: "Subcontratista Electricidad", numero: "FC-A-0088-00105", monto: 3500000, account: "bna-cc", emision: "d-50", vencimiento: "d-20", categoria: "subcontratos", estado: "pendiente" },
+    { tipo: "pagar", contraparte: "Alquiler de grúas SA", numero: "FC-A-0007-00056", monto: 2800000, account: "bna-cc", emision: "d-5", vencimiento: "d+15", categoria: "servicios", estado: "pendiente" },
+  ],
 };
