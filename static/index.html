@@ -403,6 +403,57 @@
     </div>
   </div>
 
+  <!-- Modal: proveedor (directorio) -->
+  <div class="modal-overlay hidden" id="prov-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="prov-modal-title">Nuevo proveedor</h3>
+        <button class="modal-close" id="prov-modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-row">
+          <label class="field"><span>Nombre / Razón social</span>
+            <input type="text" id="p-nombre" placeholder="Ej: Corralón El Constructor">
+          </label>
+          <label class="field"><span>CUIT</span>
+            <input type="text" id="p-cuit" placeholder="30-12345678-9">
+          </label>
+        </div>
+        <div class="modal-row">
+          <label class="field"><span>Rubro</span>
+            <input type="text" id="p-rubro" placeholder="Materiales, Subcontratos...">
+          </label>
+          <label class="field"><span>Condición IVA</span>
+            <select id="p-iva"></select>
+          </label>
+        </div>
+        <div class="modal-row">
+          <label class="field"><span>Contacto</span>
+            <input type="text" id="p-contacto" placeholder="Nombre del contacto">
+          </label>
+          <label class="field"><span>Teléfono</span>
+            <input type="text" id="p-telefono" placeholder="011-1234-5678">
+          </label>
+        </div>
+        <label class="field"><span>Email</span>
+          <input type="email" id="p-email" placeholder="ventas@proveedor.com">
+        </label>
+        <div class="modal-row">
+          <label class="field"><span>CBU / Alias</span>
+            <input type="text" id="p-cbu" placeholder="0110599520000012345678">
+          </label>
+          <label class="field"><span>Plazo de pago (días)</span>
+            <input type="number" id="p-plazo" placeholder="30" step="1">
+          </label>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-ghost" id="prov-modal-cancel">Cancelar</button>
+        <button class="btn-primary" id="prov-modal-save">Guardar proveedor</button>
+      </div>
+    </div>
+  </div>
+
   <div class="save-indicator" id="save-indicator">✓ Guardado</div>
 
   <script src="/static/bancos.js?v=1"></script>

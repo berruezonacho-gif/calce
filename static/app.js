@@ -19,6 +19,7 @@ const state = {
   movements: [],
   investments: [], // colocaciones (plazo fijo, FCI, USD, bonos, caución)
   comprobantes: [], // facturas a cobrar (AR) y a pagar (AP)
+  proveedores: [], // directorio de proveedores
   accounts: [
     { id: "efectivo", name: "Caja / Efectivo", banco: "", tipo: "efectivo", moneda: "ARS", alias: "", opening: 300000 },
     { id: "banco", name: "Cuenta principal", banco: "Banco de la Nación Argentina", tipo: "cc", moneda: "ARS", alias: "", opening: 500000 },
@@ -164,6 +165,7 @@ function saveState() {
         movements: state.movements,
         investments: state.investments,
         comprobantes: state.comprobantes,
+        proveedores: state.proveedores,
         accounts: state.accounts,
         empresa: state.empresa,
         prefs: state.prefs,
@@ -183,6 +185,7 @@ function loadState() {
     if (s.movements) state.movements = s.movements;
     if (s.investments) state.investments = s.investments;
     if (s.comprobantes) state.comprobantes = s.comprobantes;
+    if (s.proveedores) state.proveedores = s.proveedores;
     if (s.accounts) state.accounts = s.accounts;
     if (s.empresa) state.empresa = s.empresa;
     if (s.prefs) state.prefs = s.prefs;
@@ -460,6 +463,9 @@ function loadDemoDataset(ds) {
     state.comprobantes.push(comp);
     generarMovComprobante(comp);
   });
+
+  // Proveedores del demo (directorio)
+  state.proveedores = (ds.proveedores || []).map((p) => ({ ...p, id: "prov" + Math.random().toString(36).slice(2,8) }));
 }
 
 // ── Cuentas ──────────────────────────────────────────────
@@ -796,11 +802,6 @@ function renderKPIs() {
       <div class="kpi-label">Saldo al fin del período</div>
       <div class="kpi-value ${endClass}">${mc(endBal)}</div>
       <div class="kpi-sub">${fmtDateShort(from)} a ${fmtDateShort(to)}</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Piso de caja del período</div>
-      <div class="kpi-value ${minClass}">${mc(minDay.balance)}</div>
-      <div class="kpi-sub">El ${fmtDate(minDay.date)}</div>
     </div>`;
 }
 
@@ -1969,8 +1970,100 @@ function renderDashChart(serie) {
 // ═══ COBRANZAS Y PAGOS (AR / AP) ═════════════════════════
 let compTab = "cobrar"; // pestaña activa
 
+// ── Directorio de proveedores ────────────────────────────
+const CONDICIONES_IVA = ["Responsable Inscripto", "Monotributista", "Exento", "No Responsable", "Consumidor Final"];
+
+function renderProveedores(wrap) {
+  const provs = state.proveedores || [];
+  const filaProv = (p) => `<tr class="prov-row" data-id="${p.id}">
+    <td class="prov-name"><b>${h(p.nombre)}</b><small>${h(p.rubro||"")}</small></td>
+    <td class="mono">${h(p.cuit||"—")}</td>
+    <td>${h(p.contacto||"—")}<br><small class="muted">${h(p.email||"")}</small></td>
+    <td>${h(p.telefono||"—")}</td>
+    <td><span class="prov-iva">${h(p.condicionIVA||"—")}</span></td>
+    <td class="mono">${p.plazoPago? p.plazoPago+" días":"—"}</td>
+    <td class="prov-actions">
+      <button class="prov-edit-btn" data-edit="${p.id}" title="Editar">✎</button>
+      <button class="prov-del-btn" data-del="${p.id}" title="Eliminar">×</button>
+    </td>
+  </tr>`;
+
+  wrap.innerHTML = `
+    <div class="inv-head">
+      <div>
+        <div class="eyebrow">Tesorería</div>
+        <h2 class="inv-title">Cobranzas y Pagos</h2>
+        <p class="inv-sub">Administrá tus facturas por cobrar y por pagar, con vencimientos y antigüedad de deuda. Todo lo pendiente ya se refleja en tu flujo de caja proyectado.</p>
+      </div>
+      <button class="btn-primary" id="prov-add">+ Nuevo proveedor</button>
+    </div>
+
+    <div class="comp-tabs">
+      <button class="comp-tab" data-tab="cobrar">Por cobrar</button>
+      <button class="comp-tab" data-tab="pagar">Por pagar</button>
+      <button class="comp-tab active" data-tab="proveedores">Proveedores</button>
+    </div>
+
+    <div class="table-card">
+      <div class="chart-head"><h2>Directorio de proveedores</h2><span class="muted">${provs.length} proveedor${provs.length!==1?"es":""}</span></div>
+      ${provs.length ? `<div class="cf-table-scroll"><table class="cf-table">
+        <thead><tr><th>Proveedor</th><th>CUIT</th><th>Contacto</th><th>Teléfono</th><th>Cond. IVA</th><th>Plazo</th><th></th></tr></thead>
+        <tbody>${provs.map(filaProv).join("")}</tbody>
+      </table></div>` : `<p class="cf-empty">Todavía no cargaste proveedores. Tocá "Nuevo proveedor" para empezar tu base.</p>`}
+    </div>`;
+
+  $$(".comp-tab").forEach(b => b.onclick = () => { compTab = b.dataset.tab; renderComprobantes(); });
+  $("#prov-add").onclick = () => openProvModal();
+  $$(".prov-edit-btn").forEach(b => b.onclick = () => openProvModal(b.dataset.edit));
+  $$(".prov-del-btn").forEach(b => b.onclick = () => {
+    if (!confirm("¿Eliminar este proveedor del directorio?")) return;
+    state.proveedores = state.proveedores.filter(p => p.id !== b.dataset.del);
+    saveState(); renderComprobantes();
+  });
+}
+
+let provEditId = null;
+function openProvModal(id) {
+  provEditId = id || null;
+  const p = id ? state.proveedores.find(x=>x.id===id) : {};
+  $("#prov-modal-title").textContent = id ? "Editar proveedor" : "Nuevo proveedor";
+  $("#p-nombre").value = p?.nombre || "";
+  $("#p-cuit").value = p?.cuit || "";
+  $("#p-rubro").value = p?.rubro || "";
+  $("#p-contacto").value = p?.contacto || "";
+  $("#p-email").value = p?.email || "";
+  $("#p-telefono").value = p?.telefono || "";
+  $("#p-cbu").value = p?.cbu || "";
+  $("#p-plazo").value = p?.plazoPago || "";
+  const sel = $("#p-iva");
+  sel.innerHTML = CONDICIONES_IVA.map(c=>`<option value="${c}" ${p?.condicionIVA===c?"selected":""}>${c}</option>`).join("");
+  $("#prov-modal").classList.remove("hidden");
+  setTimeout(()=>$("#p-nombre").focus(), 50);
+}
+function closeProvModal() { $("#prov-modal").classList.add("hidden"); }
+function saveProvFromModal() {
+  const nombre = $("#p-nombre").value.trim();
+  if (!nombre) { alert("Ingresá el nombre del proveedor."); return; }
+  const data = {
+    nombre, cuit: $("#p-cuit").value.trim(), rubro: $("#p-rubro").value.trim(),
+    contacto: $("#p-contacto").value.trim(), email: $("#p-email").value.trim(),
+    telefono: $("#p-telefono").value.trim(), cbu: $("#p-cbu").value.trim(),
+    condicionIVA: $("#p-iva").value, plazoPago: parseInt($("#p-plazo").value) || null,
+  };
+  if (provEditId) {
+    const p = state.proveedores.find(x=>x.id===provEditId);
+    Object.assign(p, data);
+  } else {
+    state.proveedores.push({ ...data, id: "prov" + Math.random().toString(36).slice(2,8) });
+  }
+  saveState();
+  closeProvModal();
+  renderComprobantes();
+}
+
 function renderComprobantes() {
   const wrap = $("#comp-wrap");
+  if (compTab === "proveedores") return renderProveedores(wrap);
   const tipo = compTab;
   const esCobrar = tipo === "cobrar";
   const comps = state.comprobantes.filter(c => c.tipo === tipo);
@@ -2025,6 +2118,7 @@ function renderComprobantes() {
     <div class="comp-tabs">
       <button class="comp-tab ${esCobrar?"active":""}" data-tab="cobrar">Por cobrar</button>
       <button class="comp-tab ${!esCobrar?"active":""}" data-tab="pagar">Por pagar</button>
+      <button class="comp-tab" data-tab="proveedores">Proveedores</button>
     </div>
 
     <div class="comp-kpis">
@@ -2204,6 +2298,22 @@ function renderSaldos() {
       </div>
     </div>
 
+    <div class="consulta-card">
+      <div class="consulta-head">
+        <div>
+          <h3>Consultá tu saldo de un día</h3>
+          <p>Elegí una fecha y te digo cuánto vas a tener y de qué cuenta conviene sacar.</p>
+        </div>
+        <div class="consulta-controls">
+          <button class="consulta-quick" data-cq="hoy">Hoy</button>
+          <button class="consulta-quick" data-cq="manana">Mañana</button>
+          <button class="consulta-quick" data-cq="semana">En 7 días</button>
+          <input type="date" id="consulta-fecha" value="${new Date().toISOString().slice(0,10)}">
+        </div>
+      </div>
+      <div id="consulta-result"></div>
+    </div>
+
     <div class="saldos-ccy-row">
       ${monedas.map(bloqueMoneda).join("")}
     </div>
@@ -2241,6 +2351,79 @@ function renderSaldos() {
   // Gráfico de evolución del saldo total (últimos 90 + próximos 90)
   renderSaldosChart();
   $("#saldos-to-concil")?.addEventListener("click", () => switchView("conciliacion"));
+
+  // Consultor de saldo por día
+  const fechaInput = $("#consulta-fecha");
+  const runConsulta = () => consultarSaldoDia(fechaInput.value);
+  fechaInput?.addEventListener("change", runConsulta);
+  $$(".consulta-quick").forEach(b => b.addEventListener("click", () => {
+    const d = new Date();
+    if (b.dataset.cq === "manana") d.setDate(d.getDate()+1);
+    else if (b.dataset.cq === "semana") d.setDate(d.getDate()+7);
+    fechaInput.value = d.toISOString().slice(0,10);
+    runConsulta();
+  }));
+  runConsulta(); // mostrar hoy por defecto
+}
+
+// Responde: a la fecha X, cuánto tenés por cuenta y de dónde conviene sacar
+function consultarSaldoDia(fechaISO) {
+  const host = $("#consulta-result");
+  if (!host || !fechaISO) return;
+  const hoy = new Date().toISOString().slice(0,10);
+  const esFuturo = fechaISO > hoy;
+  const esPasado = fechaISO < hoy;
+
+  // Saldo por cuenta ARS a esa fecha
+  const cuentasARS = state.accounts.filter(a => a.moneda === "ARS")
+    .map(a => ({ acc: a, saldo: saldoCuentaAFecha(a, fechaISO) }))
+    .sort((a,b) => b.saldo - a.saldo);
+  const cuentasUSD = state.accounts.filter(a => a.moneda === "USD")
+    .map(a => ({ acc: a, saldo: saldoCuentaAFecha(a, fechaISO) }));
+  const totalARS = cuentasARS.reduce((s,c) => s+c.saldo, 0);
+  const totalUSD = cuentasUSD.reduce((s,c) => s+c.saldo, 0);
+
+  // ¿Hay alguna cuenta en rojo ese día?
+  const enRojo = cuentasARS.filter(c => c.saldo < 0);
+  // La cuenta con más plata (de dónde sacar)
+  const masFondos = cuentasARS[0];
+
+  const fechaTxt = new Date(fechaISO+"T00:00:00").toLocaleDateString("es-AR",{weekday:"long",day:"numeric",month:"long"});
+  const cuando = esFuturo ? "vas a tener" : esPasado ? "tenías" : "tenés";
+
+  let recomendacion = "";
+  if (enRojo.length) {
+    const falta = Math.abs(enRojo.reduce((s,c)=>s+c.saldo,0));
+    const puede = masFondos && masFondos.saldo > 0;
+    recomendacion = `<div class="consulta-warn">
+      ⚠️ ${enRojo.map(c=>h(c.acc.name)).join(", ")} ${enRojo.length>1?"quedan":"queda"} en rojo ese día.
+      ${puede ? `Cubrí el descubierto transfiriendo ${moneyC(falta,"ARS")} desde <b>${h(masFondos.acc.name)}</b> (tiene ${moneyC(masFondos.saldo,"ARS")}).` : "No tenés otra cuenta con fondos suficientes ese día — revisá el flujo."}
+    </div>`;
+  } else if (masFondos) {
+    recomendacion = `<div class="consulta-tip">
+      💡 Si necesitás sacar plata ese día, la cuenta con más fondos es <b>${h(masFondos.acc.name)}</b> con ${moneyC(masFondos.saldo,"ARS")}.
+    </div>`;
+  }
+
+  host.innerHTML = `
+    <div class="consulta-total">
+      <div>
+        <span class="ct-label">El ${fechaTxt} ${cuando}:</span>
+        <span class="ct-value ${totalARS<0?'neg':''}">${moneyC(totalARS,"ARS")}</span>
+        ${totalUSD ? `<span class="ct-usd">+ ${moneyC(totalUSD,"USD")}</span>` : ""}
+      </div>
+    </div>
+    <div class="consulta-cuentas">
+      ${cuentasARS.map(c => `<div class="consulta-cuenta ${c.saldo<0?'neg':''}">
+        <span class="cc-name">${h(c.acc.name)}</span>
+        <span class="cc-saldo">${moneyC(c.saldo,"ARS")}</span>
+      </div>`).join("")}
+      ${cuentasUSD.filter(c=>c.saldo).map(c => `<div class="consulta-cuenta">
+        <span class="cc-name">${h(c.acc.name)}</span>
+        <span class="cc-saldo">${moneyC(c.saldo,"USD")}</span>
+      </div>`).join("")}
+    </div>
+    ${recomendacion}`;
 }
 
 function renderSaldosChart() {
@@ -3354,6 +3537,108 @@ async function renderFCI() {
 }
 
 // ── Impuestos ────────────────────────────────────────────
+// Calendario de vencimientos impositivos (fechas típicas AFIP/ARBA).
+// Genera los próximos vencimientos con monto estimado desde los movimientos.
+function proximosVencimientosImpositivos() {
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  // Estimar montos típicos desde los movimientos de impuestos cargados,
+  // o usar los últimos valores conocidos.
+  const buscarMonto = (kws, def) => {
+    const m = state.movements.find(x => {
+      const t = (x.label||"").toLowerCase();
+      return x.amount < 0 && kws.some(k => t.includes(k));
+    });
+    return m ? Math.abs(m.amount) : def;
+  };
+  const montoIVA = buscarMonto(["iva"], 4100000);
+  const montoIIBB = buscarMonto(["iibb","ingresos brutos","arba"], 1500000);
+  const montoGanancias = buscarMonto(["ganancias"], 2200000);
+  const montoCargas = buscarMonto(["cargas","suss","931","afip"], 6200000);
+
+  // Definición de impuestos y su día de vencimiento mensual (aprox.)
+  const defs = [
+    { concepto: "IVA (DDJJ mensual)", org: "AFIP", dia: 18, monto: montoIVA, cat: "iva" },
+    { concepto: "IIBB (Ingresos Brutos)", org: "ARBA", dia: 15, monto: montoIIBB, cat: "iibb" },
+    { concepto: "Cargas sociales (F.931)", org: "AFIP", dia: 12, monto: montoCargas, cat: "cargas" },
+    { concepto: "Anticipo Ganancias", org: "AFIP", dia: 22, monto: montoGanancias, cat: "ganancias", bimestral: true },
+  ];
+
+  const vtos = [];
+  for (let mesOffset = 0; mesOffset < 3; mesOffset++) {
+    defs.forEach(d => {
+      // Ganancias es cada 2 meses (anticipos)
+      if (d.bimestral && mesOffset % 2 !== 0) return;
+      const fecha = new Date(hoy.getFullYear(), hoy.getMonth() + mesOffset, d.dia);
+      if (fecha < hoy) return; // ya pasó
+      vtos.push({
+        concepto: d.concepto, org: d.org, monto: d.monto, cat: d.cat,
+        fecha: fecha.toISOString().slice(0,10),
+        dias: Math.round((fecha - hoy)/86400000),
+      });
+    });
+  }
+  return vtos.sort((a,b) => new Date(a.fecha) - new Date(b.fecha));
+}
+
+function renderCalendarioImpuestos() {
+  const host = $("#imp-calendario");
+  if (!host) return;
+  const vtos = proximosVencimientosImpositivos();
+  const total30 = vtos.filter(v => v.dias <= 30).reduce((s,v)=>s+v.monto,0);
+  const proximo = vtos[0];
+
+  const catColor = { iva:"#4C8DFF", iibb:"#F5A623", cargas:"#E65100", ganancias:"#7B61FF" };
+
+  host.innerHTML = `
+    <div class="imp-cal-card">
+      <div class="imp-cal-head">
+        <div>
+          <h3>Calendario de vencimientos</h3>
+          <p>Los próximos impuestos a pagar. Podés llevarlos al flujo de caja.</p>
+        </div>
+        <div class="imp-cal-kpi">
+          <small>A pagar en 30 días</small>
+          <b>${money(total30)}</b>
+        </div>
+      </div>
+      <div class="imp-cal-list">
+        ${vtos.slice(0,8).map(v => `
+          <div class="imp-cal-item">
+            <div class="ical-date">
+              <span class="ical-day">${new Date(v.fecha+"T00:00:00").getDate()}</span>
+              <span class="ical-mon">${new Date(v.fecha+"T00:00:00").toLocaleDateString("es-AR",{month:"short"})}</span>
+            </div>
+            <div class="ical-body">
+              <b>${v.concepto}</b>
+              <span class="ical-org" style="color:${catColor[v.cat]||'#64748B'}">${v.org} · ${v.dias===0?"vence hoy":`en ${v.dias} días`}</span>
+            </div>
+            <div class="ical-monto">${money(v.monto)}</div>
+          </div>`).join("")}
+      </div>
+      <button class="btn-primary sm" id="imp-cal-tocashflow">Llevar estos vencimientos al flujo de caja →</button>
+    </div>`;
+
+  $("#imp-cal-tocashflow").onclick = () => {
+    let n = 0;
+    vtos.forEach(v => {
+      // Evitar duplicar: solo si no existe ya un movimiento imp. en esa fecha/concepto
+      const existe = state.movements.some(m => m.date === v.fecha && (m.label||"").includes(v.concepto.split(" ")[0]) && m.impVto);
+      if (!existe) {
+        state.movements.push({
+          label: v.concepto, amount: -Math.abs(v.monto), date: v.fecha,
+          recurrence: "none", medio: "transferencia",
+          account: state.accounts.find(a=>a.moneda==="ARS")?.id || state.accounts[0]?.id,
+          categoria: "impuestos", impVto: true,
+        });
+        n++;
+      }
+    });
+    project();
+    alert(`${n} vencimiento${n!==1?"s":""} agregado${n!==1?"s":""} al flujo de caja.`);
+    switchView("flujo");
+  };
+}
+
 function renderImpuestos() {
   const wrap = $("#imp-wrap");
   if (!state.impOps) {
@@ -3366,8 +3651,15 @@ function renderImpuestos() {
   }
   wrap.innerHTML = `
     <div class="mkt-head"><div class="eyebrow">Proyección impositiva</div>
-      <h2 class="inv-title">Impuestos a pagar</h2>
-      <p class="inv-sub">Cargá tus ventas y compras y estimá IVA, IIBB, Ganancias e impuesto al cheque. Los vencimientos se pueden llevar al flujo de caja.</p></div>
+      <h2 class="inv-title">Impuestos</h2>
+      <p class="inv-sub">Tu calendario de vencimientos impositivos y un estimador de cuánto vas a pagar. Los vencimientos se pueden llevar al flujo de caja.</p></div>
+
+    <div id="imp-calendario"></div>
+
+    <div class="imp-estimador-head">
+      <h3>Estimador de impuestos</h3>
+      <p>Cargá tus ventas y compras del período y calculamos IVA, IIBB, Ganancias e impuesto al cheque.</p>
+    </div>
 
     <div class="imp-board">
       <aside class="imp-controls ctrl-card">
@@ -3383,6 +3675,8 @@ function renderImpuestos() {
       </aside>
       <div class="imp-result" id="imp-result"><div class="inv-placeholder">Cargá tus operaciones y calculá.</div></div>
     </div>`;
+
+  renderCalendarioImpuestos();
 
   const renderOps = () => {
     $("#imp-ops").innerHTML = state.impOps.map((op, i) => `
@@ -3612,23 +3906,30 @@ function renderConcResult(r, extractoCount) {
 function renderConfig() {
   const wrap = $("#config-wrap");
   const bancoOptions = (sel) => BANCOS_AR.map((b) => `<option value="${h(b)}" ${b === sel ? "selected" : ""}>${h(b)}</option>`).join("");
+  const sec = state.cfgSection || "cuentas";
 
-  wrap.innerHTML = `
-    <div class="mkt-head"><div class="eyebrow">Configuración</div>
-      <h2 class="inv-title">Ajustes de la aplicación</h2>
-      <p class="inv-sub">Configurá tus cuentas, los datos de la empresa y las preferencias antes de empezar a usar Calce.</p></div>
+  const secciones = [
+    { v: "cuentas", label: "Cuentas", icono: "🏦" },
+    { v: "empresa", label: "Empresa", icono: "🏢" },
+    { v: "impuestos", label: "Parámetros impositivos", icono: "📊" },
+    { v: "preferencias", label: "Preferencias", icono: "⚙️" },
+    { v: "datos", label: "Datos y respaldo", icono: "💾" },
+  ];
 
-    <div class="cfg-section card">
+  // Panel de la sección activa
+  let panel = "";
+  if (sec === "cuentas") {
+    panel = `
       <div class="cfg-sec-head">
         <h3>Cuentas</h3>
         <button class="btn-primary sm" id="cfg-add-account">+ Agregar cuenta</button>
       </div>
       <p class="cfg-hint">Tus cuentas bancarias y la caja de efectivo. El efectivo y las billeteras se distinguen después en el <b>medio de pago</b> de cada movimiento.</p>
-      <div id="cfg-accounts"></div>
-    </div>
-
-    <div class="cfg-section card">
-      <h3>Empresa</h3>
+      <div id="cfg-accounts"></div>`;
+  } else if (sec === "empresa") {
+    panel = `
+      <div class="cfg-sec-head"><h3>Datos de la empresa</h3></div>
+      <p class="cfg-hint">Estos datos aparecen en el encabezado y en los reportes.</p>
       <div class="cfg-grid">
         <label class="field"><span>Nombre / Razón social</span>
           <input type="text" id="cfg-emp-nombre" value="${h(state.empresa.nombre)}" placeholder="Mi Empresa S.A."></label>
@@ -3637,10 +3938,10 @@ function renderConfig() {
         <label class="field"><span>Provincia</span>
           <select id="cfg-emp-prov">${["","CABA","Buenos Aires","Córdoba","Santa Fe","Mendoza","Tucumán","Entre Ríos","Salta","Otra"].map(p=>`<option ${p===state.empresa.provincia?"selected":""}>${p||"Elegir…"}</option>`).join("")}</select></label>
       </div>
-    </div>
-
-    <div class="cfg-section card">
-      <h3>Parámetros impositivos</h3>
+      <button class="btn-primary sm cfg-save-btn" id="cfg-save-empresa">Guardar cambios</button>`;
+  } else if (sec === "impuestos") {
+    panel = `
+      <div class="cfg-sec-head"><h3>Parámetros impositivos</h3></div>
       <p class="cfg-hint">Alícuotas de referencia para la proyección impositiva. Validalas con tu contador según tu actividad y provincia.</p>
       <div class="cfg-grid">
         <label class="field"><span>IVA (%)</span>
@@ -3648,10 +3949,10 @@ function renderConfig() {
         <label class="field"><span>Ingresos Brutos (%)</span>
           <input type="number" id="cfg-iibb" value="${state.impuestos.iibb}" step="0.1"></label>
       </div>
-    </div>
-
-    <div class="cfg-section card">
-      <h3>Preferencias</h3>
+      <button class="btn-primary sm cfg-save-btn" id="cfg-save-imp">Guardar cambios</button>`;
+  } else if (sec === "preferencias") {
+    panel = `
+      <div class="cfg-sec-head"><h3>Preferencias</h3></div>
       <div class="cfg-grid">
         <label class="field"><span>Moneda de visualización</span>
           <select id="cfg-moneda">
@@ -3663,15 +3964,79 @@ function renderConfig() {
             <option value="dd/mm/aa" ${state.prefs.formatoFecha==="dd/mm/aa"?"selected":""}>dd/mm/aa</option>
             <option value="dd/mm/aaaa" ${state.prefs.formatoFecha==="dd/mm/aaaa"?"selected":""}>dd/mm/aaaa</option>
           </select></label>
-        <label class="field"><span>Colchón mínimo por defecto</span>
-          <div class="money-input"><em>$</em><input type="number" id="cfg-colchon" value="${state.prefs.colchon}" step="10000"></div></label>
-        <label class="field"><span>Horizonte por defecto</span>
-          <select id="cfg-horizonte">
-            ${[30,60,90,180,365].map(d=>`<option value="${d}" ${state.prefs.horizonte===d?"selected":""}>${d} días</option>`).join("")}</select></label>
+      </div>
+      <button class="btn-primary sm cfg-save-btn" id="cfg-save-prefs">Guardar cambios</button>`;
+  } else if (sec === "datos") {
+    panel = `
+      <div class="cfg-sec-head"><h3>Datos y respaldo</h3></div>
+      <p class="cfg-hint">Todos tus datos se guardan en este navegador. Podés reiniciar la app o cargar el ejemplo de demostración.</p>
+      <div class="cfg-datos-actions">
+        <button class="btn-ghost" id="cfg-load-demo">Cargar ejemplo (constructora)</button>
+        <button class="btn-ghost cfg-danger" id="cfg-reset">Borrar todos mis datos</button>
+      </div>
+      <p class="cfg-hint" style="margin-top:12px">La app guarda automáticamente cada cambio. Si algo se ve raro, probá recargar con Cmd/Ctrl+Shift+R.</p>`;
+  }
+
+  wrap.innerHTML = `
+    <div class="mkt-head"><div class="eyebrow">Configuración</div>
+      <h2 class="inv-title">Ajustes de la aplicación</h2>
+      <p class="inv-sub">Elegí una sección para editar. Tus cambios se guardan automáticamente.</p></div>
+
+    <div class="cfg-layout">
+      <aside class="cfg-nav">
+        ${secciones.map(s => `<button class="cfg-nav-item ${s.v===sec?"active":""}" data-cfgsec="${s.v}">
+          <span class="cfg-nav-ico">${s.icono}</span> ${s.label}
+        </button>`).join("")}
+      </aside>
+      <div class="cfg-panel card">
+        ${panel}
       </div>
     </div>`;
 
+  // Navegación entre secciones
+  $$(".cfg-nav-item").forEach(b => b.onclick = () => { state.cfgSection = b.dataset.cfgsec; renderConfig(); });
+
+  // Sección Datos
+  if (sec === "datos") {
+    $("#cfg-load-demo").onclick = () => {
+      if (!confirm("Esto reemplaza tus datos actuales por el ejemplo de la constructora. ¿Seguir?")) return;
+      loadDemoDataset(DEMO_CONSTRUCTORA); saveState(); project(); switchView("dashboard");
+    };
+    $("#cfg-reset").onclick = () => {
+      if (!confirm("¿Borrar TODOS tus datos? Esta acción no se puede deshacer.")) return;
+      localStorage.removeItem(STORE_KEY); location.reload();
+    };
+    return;
+  }
+  if (sec === "empresa") {
+    $("#cfg-save-empresa").onclick = () => {
+      state.empresa.nombre = $("#cfg-emp-nombre").value;
+      state.empresa.cuit = $("#cfg-emp-cuit").value;
+      state.empresa.provincia = $("#cfg-emp-prov").value;
+      saveState(); flashSaved();
+    };
+    return;
+  }
+  if (sec === "impuestos") {
+    $("#cfg-save-imp").onclick = () => {
+      state.impuestos.iva = parseFloat($("#cfg-iva").value) || 0;
+      state.impuestos.iibb = parseFloat($("#cfg-iibb").value) || 0;
+      saveState(); flashSaved();
+    };
+    return;
+  }
+  if (sec === "preferencias") {
+    $("#cfg-save-prefs").onclick = () => {
+      state.prefs.moneda = $("#cfg-moneda").value;
+      state.prefs.formatoFecha = $("#cfg-fecha").value;
+      saveState(); flashSaved();
+    };
+    return;
+  }
+  // sec === "cuentas": continúa con el render de cuentas abajo
+
   const renderCfgAccounts = () => {
+    if (!$("#cfg-accounts")) return;
     $("#cfg-accounts").innerHTML = state.accounts.map((a) => `
       <div class="cfg-account" data-id="${a.id}">
         <div class="cfg-acc-grid">
@@ -3724,26 +4089,11 @@ function renderConfig() {
   };
   renderCfgAccounts();
 
-  $("#cfg-add-account").onclick = () => {
+  const addBtn = $("#cfg-add-account");
+  if (addBtn) addBtn.onclick = () => {
     state.accounts.push({ id: newAccountId(), name: "Nueva cuenta", banco: BANCOS_AR[0], tipo: "ca", moneda: "ARS", alias: "", opening: 0 });
     renderCfgAccounts();
     renderAccounts(); syncAccountSelectors();
-  };
-
-  $("#cfg-emp-nombre").oninput = (e) => { state.empresa.nombre = e.target.value; saveState(); };
-  $("#cfg-emp-cuit").oninput = (e) => { state.empresa.cuit = e.target.value; saveState(); };
-  $("#cfg-emp-prov").onchange = (e) => { state.empresa.provincia = e.target.value; saveState(); };
-  $("#cfg-iva").oninput = (e) => { state.impuestos.iva = parseFloat(e.target.value) || 0; saveState(); };
-  $("#cfg-iibb").oninput = (e) => { state.impuestos.iibb = parseFloat(e.target.value) || 0; saveState(); };
-  $("#cfg-moneda").onchange = (e) => { state.prefs.moneda = e.target.value; saveState(); };
-  $("#cfg-fecha").onchange = (e) => { state.prefs.formatoFecha = e.target.value; saveState(); };
-  $("#cfg-colchon").oninput = (e) => {
-    state.prefs.colchon = parseFloat(e.target.value) || 0;
-    if ($("#buffer")) $("#buffer").value = state.prefs.colchon;
-  };
-  $("#cfg-horizonte").onchange = (e) => {
-    state.prefs.horizonte = parseInt(e.target.value, 10);
-    if ($("#horizon")) { $("#horizon").value = state.prefs.horizonte; project(); }
   };
 }
 
@@ -3829,6 +4179,11 @@ function init() {
   $("#comp-modal-cancel").addEventListener("click", closeCompModal);
   $$(".comp-mode").forEach(b => b.addEventListener("click", () => setCompMode(b.dataset.ctipo)));
   $("#c-account").addEventListener("change", syncCompAccount);
+
+  // Modal de proveedor
+  $("#prov-modal-save").addEventListener("click", saveProvFromModal);
+  $("#prov-modal-close").addEventListener("click", closeProvModal);
+  $("#prov-modal-cancel").addEventListener("click", closeProvModal);
 
   // Importar desde Excel/CSV
   $("#import-mov").addEventListener("click", () => $("#import-file").click());

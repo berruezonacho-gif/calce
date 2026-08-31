@@ -1085,3 +1085,76 @@ input:focus, select:focus {
 .esc-delta.up { color: var(--green); }
 .esc-delta.down { color: var(--red); }
 @media (max-width: 900px) { .esc-board { grid-template-columns: 1fr; } .esc-compare { grid-template-columns: 1fr; } }
+
+/* ═══ Consultor de saldo por día ══════════════════════════ */
+.consulta-card { background: linear-gradient(180deg, #F0F6FF, var(--card)); border: 1px solid #C7DBF7; border-radius: 16px; padding: 22px 24px; margin-bottom: 20px; box-shadow: var(--shadow); }
+.consulta-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+.consulta-head h3 { font-family: "Fraunces", serif; font-size: 17px; font-weight: 600; margin-bottom: 4px; }
+.consulta-head p { font-size: 13px; color: var(--slate); }
+.consulta-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.consulta-quick { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; font-family: inherit; font-size: 13px; font-weight: 500; color: var(--navy); cursor: pointer; transition: .12s; }
+.consulta-quick:hover { border-color: var(--accent); background: #F7FAFF; }
+#consulta-fecha { border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font-family: inherit; font-size: 13px; }
+
+.consulta-total { margin: 18px 0 12px; }
+.ct-label { font-size: 13.5px; color: var(--slate); text-transform: capitalize; }
+.ct-value { font-family: "Fraunces", serif; font-size: 26px; font-weight: 600; color: var(--navy); margin-left: 10px; }
+.ct-value.neg { color: var(--red); }
+.ct-usd { font-family: var(--mono); font-size: 15px; color: var(--slate); margin-left: 8px; }
+
+.consulta-cuentas { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.consulta-cuenta { display: flex; flex-direction: column; background: #fff; border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 14px; min-width: 160px; }
+.consulta-cuenta.neg { border-color: #F5C6C0; background: #FDF3F2; }
+.cc-name { font-size: 12px; color: var(--slate-2); }
+.cc-saldo { font-family: var(--mono); font-size: 15px; font-weight: 600; margin-top: 2px; }
+.consulta-cuenta.neg .cc-saldo { color: var(--red); }
+
+.consulta-warn { background: #FDECEA; border: 1px solid #F5C6C0; border-radius: 10px; padding: 12px 16px; font-size: 13.5px; color: #8B2E22; }
+.consulta-warn b { color: #C62828; }
+.consulta-tip { background: #EAF6EC; border: 1px solid #B8E0BC; border-radius: 10px; padding: 12px 16px; font-size: 13.5px; color: #2E5B33; }
+.consulta-tip b { color: #1B5E20; }
+
+/* ═══ Directorio de proveedores ═══════════════════════════ */
+.prov-name b { display: block; font-size: 13.5px; }
+.prov-name small { font-size: 11px; color: var(--slate-2); }
+.prov-iva { display: inline-block; font-size: 11px; padding: 3px 9px; border-radius: 20px; background: var(--paper); color: var(--slate); font-family: "Inter", sans-serif; }
+.prov-actions { white-space: nowrap; text-align: right; }
+.prov-edit-btn, .prov-del-btn { width: 26px; height: 26px; border-radius: 6px; background: #fff; border: 1px solid var(--line); cursor: pointer; font-size: 13px; margin-left: 4px; }
+.prov-edit-btn:hover { border-color: var(--accent); color: var(--accent); }
+.prov-del-btn:hover { border-color: var(--red); color: var(--red); }
+
+/* ═══ Calendario de impuestos ═════════════════════════════ */
+.imp-cal-card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 22px 24px; margin-bottom: 24px; box-shadow: var(--shadow); }
+.imp-cal-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+.imp-cal-head h3 { font-family: "Fraunces", serif; font-size: 17px; font-weight: 600; margin-bottom: 3px; }
+.imp-cal-head p { font-size: 13px; color: var(--slate); }
+.imp-cal-kpi { text-align: right; }
+.imp-cal-kpi small { display: block; font-size: 11px; color: var(--slate-2); text-transform: uppercase; letter-spacing: .04em; }
+.imp-cal-kpi b { font-family: "Fraunces", serif; font-size: 22px; color: var(--red); }
+.imp-cal-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.imp-cal-item { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 12px; transition: .12s; }
+.imp-cal-item:hover { border-color: var(--line); background: #FAFBFD; }
+.ical-date { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 48px; height: 48px; background: var(--paper); border-radius: 10px; }
+.ical-day { font-family: "Fraunces", serif; font-size: 20px; font-weight: 600; line-height: 1; color: var(--navy); }
+.ical-mon { font-size: 10px; text-transform: uppercase; color: var(--slate-2); }
+.ical-body { flex: 1; }
+.ical-body b { display: block; font-size: 14px; }
+.ical-org { font-size: 12px; font-weight: 500; }
+.ical-monto { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--red); }
+.imp-estimador-head { margin-bottom: 14px; }
+.imp-estimador-head h3 { font-family: "Fraunces", serif; font-size: 16px; font-weight: 600; }
+.imp-estimador-head p { font-size: 13px; color: var(--slate); }
+
+/* ═══ Configuración por secciones ═════════════════════════ */
+.cfg-layout { display: grid; grid-template-columns: 240px 1fr; gap: 20px; align-items: start; }
+.cfg-nav { display: flex; flex-direction: column; gap: 4px; }
+.cfg-nav-item { display: flex; align-items: center; gap: 10px; background: none; border: none; border-radius: 10px; padding: 12px 14px; font-family: inherit; font-size: 14px; font-weight: 500; color: var(--slate); cursor: pointer; text-align: left; transition: .12s; }
+.cfg-nav-item:hover { background: var(--paper); }
+.cfg-nav-item.active { background: var(--navy); color: #fff; font-weight: 600; }
+.cfg-nav-ico { font-size: 16px; }
+.cfg-panel { padding: 24px 26px; }
+.cfg-save-btn { margin-top: 18px; }
+.cfg-datos-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+.cfg-danger { color: var(--red); border-color: #F5C6C0; }
+.cfg-danger:hover { background: #FDECEA; }
+@media (max-width: 800px) { .cfg-layout { grid-template-columns: 1fr; } }
