@@ -423,6 +423,7 @@ function loadDemoDataset(ds) {
   (ds.investments || []).forEach((raw) => {
     const inv = {
       id: invId(), tipo: raw.tipo, label: raw.label, monto: raw.monto,
+      sociedad: raw.sociedad || "",
       moneda: (state.accounts.find(a => a.id === raw.account)?.moneda) || "ARS",
       account: raw.account,
       fechaColocacion: relDate(raw.fechaColocacion),
@@ -797,11 +798,6 @@ function renderKPIs() {
       <div class="kpi-label">Colocado (invertido)</div>
       <div class="kpi-value">${mc(colocado)}</div>
       <div class="kpi-sub">${colocado > 0 ? "No es gasto · vuelve con rendimiento" : "Sin inversiones activas"}</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-label">Saldo al fin del período</div>
-      <div class="kpi-value ${endClass}">${mc(endBal)}</div>
-      <div class="kpi-sub">${fmtDateShort(from)} a ${fmtDateShort(to)}</div>
     </div>`;
 }
 
@@ -924,14 +920,12 @@ function renderCashflowTable() {
   const { from, to } = cfRangeDates();
   const mode = state.cfMode || "grilla";
   if (mode === "grilla") {
-    // La grilla usa semana o mes (no día); si está en "día", forzar semana
-    let g = state.cfGrain || "semana";
-    if (g === "dia") g = "semana";
-    return renderGrid(from, to, g);
+    // La grilla se muestra por semana (día se ve en modo Detalle)
+    return renderGrid(from, to, "semana");
   }
-  // Modo detalle
+  // Modo detalle: día o semana
+  const grain = (state.cfGrain === "dia") ? "dia" : "semana";
   const days = computeDaySeries(from, to);
-  const grain = state.cfGrain === "mes" ? "semana" : (state.cfGrain || "dia");
   if (grain === "semana") return renderTableWeekly(days);
   return renderTableDaily(days);
 }
@@ -1093,11 +1087,10 @@ function renderGrid(fromISO, toISO, grain) {
           ${totalRow("Total egresos", totOut, "tot-out")}
           <tr class="grid-neto"><td>Flujo neto</td>${neto.map(v=>`<td class="grid-num ${v>0?'in':v<0?'out':''}">${v?(v>0?'+':'−')+mc(Math.abs(v)):"·"}</td>`).join("")}<td class="grid-num">${mc(neto.reduce((s,v)=>s+v,0))}</td></tr>
           ${invRow}
-          ${saldoRow}
         </tbody>
       </table>
     </div>
-    <div class="cf-table-foot"><span>${fmtDateShort(fromISO)} a ${fmtDateShort(toISO)} · saldo en rojo = descubierto · tocá una categoría para ver el detalle</span></div>`;
+    <div class="cf-table-foot"><span>${fmtDateShort(fromISO)} a ${fmtDateShort(toISO)} · tocá una categoría para ver el detalle</span></div>`;
 
   // Expandir categoría → mostrar movimientos individuales
   $$(".grid-cat").forEach((row) => {
@@ -1474,43 +1467,34 @@ function renderInsights() {
 
 // ── Excedente (placeholder con datos del cash flow) ──────
 function renderExcedente() {
-  if (!state.result) return;
-  const s = state.result.summary;
-  const surplus = s.stable_surplus;
+  // Excedente invertible = líquido de hoy en cuentas bancarias (no efectivo).
+  // Un FCI money market se rescata al otro día, así que la plata en banco
+  // puede colocarse sin bloquearla: no depende de proyecciones a 90 días.
+  const cuentasBanco = state.accounts.filter(a => a.moneda === "ARS" && a.tipo !== "efectivo");
+  const excedente = cuentasBanco.reduce((s,a) => s + saldoCuentaAFecha(a), 0);
+  const yaColocado = totalColocado("ARS");
+
   $("#excedente-wrap").innerHTML = `
     <div class="exc-hero">
-      <div class="eyebrow">Excedente colocable</div>
-      <div class="big">${money(surplus)}</div>
-      <p class="sub">Es lo máximo que podés invertir hoy sin que el saldo perfore tu colchón de ${money(s.min_buffer)} en los próximos ${s.horizon_days} días.</p>
+      <div class="eyebrow">Excedente para invertir</div>
+      <div class="big">${money(excedente)}</div>
+      <p class="sub">Es tu plata líquida en cuentas bancarias hoy. La podés colocar en un FCI money market y rescatarla al otro día.</p>
     </div>
-    <div class="opt-grid">
-      <div class="opt-card">
-        <span class="opt-tag liq">Liquidez inmediata</span>
-        <h3>FCI Money Market</h3>
-        <p style="font-size:13px;color:var(--slate)">Rescate en el día (T+0). Ideal para plata que podés necesitar en cualquier momento.</p>
-        <div class="opt-rows">
-          <div><span>Horizonte</span><b>Cualquiera</b></div>
-          <div><span>Riesgo</span><b>Muy bajo</b></div>
-          <div><span>Liquidez</span><b>Inmediata</b></div>
-        </div>
-      </div>
-      <div class="opt-card">
-        <span class="opt-tag mid">Plazo fijo</span>
-        <h3>ONs y bonos</h3>
-        <p style="font-size:13px;color:var(--slate)">Mayor rendimiento si podés inmovilizar el excedente un tiempo definido.</p>
-        <div class="opt-rows">
-          <div><span>Horizonte</span><b>Definido</b></div>
-          <div><span>Riesgo</span><b>Bajo-medio</b></div>
-          <div><span>Liquidez</span><b>Al vencimiento</b></div>
-        </div>
-      </div>
+
+    <div class="exc-cuentas">
+      ${cuentasBanco.map(a => `<div class="exc-cuenta">
+        <span>${h(a.name)}</span>
+        <b>${moneyC(saldoCuentaAFecha(a), "ARS")}</b>
+      </div>`).join("")}
     </div>
-    <p class="exc-note">Elegí un instrumento y simulá el flujo de cobros en la sección Inversiones.</p>
-    <div style="text-align:center;margin-top:16px">
-      <button class="btn-primary" id="exc-invest-btn" style="width:auto;padding:12px 28px">Invertir el excedente →</button>
+
+    ${yaColocado > 0 ? `<p class="exc-note">Ya tenés ${money(yaColocado)} colocados en inversiones activas.</p>` : ""}
+
+    <div style="text-align:center;margin-top:20px">
+      <button class="btn-primary" id="exc-invest-btn" style="width:auto;padding:12px 28px">Invertir en un FCI →</button>
     </div>`;
   const btn = $("#exc-invest-btn");
-  if (btn) btn.addEventListener("click", () => switchView("inversiones"));
+  if (btn) btn.addEventListener("click", () => openInvModal());
 }
 
 // ── Dólar: comprar / vender divisas ──────────────────────
@@ -2423,7 +2407,63 @@ function consultarSaldoDia(fechaISO) {
         <span class="cc-saldo">${moneyC(c.saldo,"USD")}</span>
       </div>`).join("")}
     </div>
-    ${recomendacion}`;
+    ${recomendacion}
+    ${renderPagosDelDia(fechaISO)}`;
+}
+
+// Lista de movimientos (cobros y pagos) que caen en una fecha
+function renderPagosDelDia(fechaISO) {
+  const items = [];
+  state.movements.forEach((m) => {
+    if (!m.amount || !m.date) return;
+    // Expandir recurrencia y ver si cae ese día
+    const base = new Date(m.date + "T00:00:00");
+    const target = new Date(fechaISO + "T00:00:00");
+    let cae = false;
+    if (m.recurrence === "none" || !m.recurrence) {
+      cae = m.date === fechaISO;
+    } else {
+      let d = new Date(base), g = 0;
+      while (d <= target && g < 3000) {
+        if (d.toISOString().slice(0,10) === fechaISO) { cae = true; break; }
+        if (m.recurrence==="weekly") d.setDate(d.getDate()+7);
+        else if (m.recurrence==="quincenal") d.setDate(d.getDate()+14);
+        else if (m.recurrence==="monthly") d.setMonth(d.getMonth()+1);
+        else if (m.recurrence==="quarterly") d.setMonth(d.getMonth()+3);
+        else break;
+        g++;
+      }
+    }
+    if (cae) items.push(m);
+  });
+
+  if (!items.length) {
+    return `<div class="pagos-dia"><h4>Movimientos de ese día</h4><p class="pd-empty">No hay cobros ni pagos programados para ese día.</p></div>`;
+  }
+
+  const cobros = items.filter(m => m.amount > 0).sort((a,b)=>b.amount-a.amount);
+  const pagos = items.filter(m => m.amount < 0).sort((a,b)=>a.amount-b.amount);
+  const totalCobros = cobros.reduce((s,m)=>s+m.amount,0);
+  const totalPagos = pagos.reduce((s,m)=>s+Math.abs(m.amount),0);
+
+  const fila = (m) => {
+    const ccy = movCurrency(m);
+    return `<div class="pd-item">
+      <span class="pd-label">${h(m.label||"(sin concepto)")}</span>
+      <span class="pd-acc">${h(accountName(m.account))}</span>
+      <span class="pd-monto ${m.amount>0?'in':'out'}">${m.amount>0?'+':'−'}${moneyC(Math.abs(m.amount), ccy)}</span>
+    </div>`;
+  };
+
+  return `<div class="pagos-dia">
+    <h4>Cobros y pagos de ese día</h4>
+    ${cobros.length ? `<div class="pd-group"><span class="pd-group-t in">Entra</span>${cobros.map(fila).join("")}</div>` : ""}
+    ${pagos.length ? `<div class="pd-group"><span class="pd-group-t out">Sale</span>${pagos.map(fila).join("")}</div>` : ""}
+    <div class="pd-neto">
+      <span>Neto del día</span>
+      <b class="${totalCobros-totalPagos>=0?'in':'out'}">${totalCobros-totalPagos>=0?'+':'−'}${moneyC(Math.abs(totalCobros-totalPagos),"ARS")}</b>
+    </div>
+  </div>`;
 }
 
 function renderSaldosChart() {
@@ -2539,7 +2579,7 @@ function renderCartera() {
       : `<button class="inv-del-btn" data-del="${inv.id}" title="Eliminar">×</button>`;
     return `<tr class="inv-row" data-id="${inv.id}">
       <td><span class="inv-tag inv-${inv.tipo}">${tipoInvLabel(inv.tipo)}</span></td>
-      <td class="inv-name">${h(inv.label || tipoInvLabel(inv.tipo))}</td>
+      <td class="inv-name">${h(inv.label || tipoInvLabel(inv.tipo))}${inv.sociedad ? `<br><small class="inv-soc">${h(inv.sociedad)}</small>` : ""}<br><small class="inv-acc">en ${h(accountName(inv.account))}</small></td>
       <td class="mono">${moneyC(inv.monto, inv.moneda)}</td>
       <td class="mono">${inv.rendimiento ? num2g(inv.rendimiento) + "%" : "—"}</td>
       <td>${vencInfo}</td>
@@ -2632,6 +2672,7 @@ function openInvModal() {
   $("#i-tipo").innerHTML = TIPOS_INVERSION.map(t => `<option value="${t.v}">${t.label}</option>`).join("");
   syncInvAccountSelect();
   $("#i-label").value = "";
+  $("#i-sociedad").value = "";
   $("#i-monto").value = "";
   $("#i-fecha").value = new Date().toISOString().slice(0,10);
   $("#i-venc").value = "";
@@ -2704,6 +2745,7 @@ function saveInvFromModal() {
 
   const inv = {
     id: invId(), tipo, label, monto: Math.abs(monto),
+    sociedad: $("#i-sociedad").value.trim(),
     moneda: acc ? acc.moneda : "ARS", account,
     fechaColocacion: fecha, fechaVenc: venc,
     rendimiento: rend, estado: "activa",
@@ -4111,7 +4153,6 @@ function switchView(view) {
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${view}`).classList.remove("hidden");
   if (view === "dashboard") renderDashboard();
-  if (view === "escenarios") renderEscenarios();
   if (view === "saldos") renderSaldos();
   if (view === "comprobantes") renderComprobantes();
   if (view === "cartera") renderCartera();
@@ -4135,15 +4176,18 @@ function init() {
     if ($("#buffer")) $("#buffer").value = state.prefs.colchon;
     if ($("#horizon")) $("#horizon").value = state.prefs.horizonte;
   } else {
-    // Primera vez: movimientos de ejemplo (una PyME típica)
-    const demo = [
-      { label: "Cobranzas de clientes", value: 500000, date: monthDay(25), recurrence: "monthly", account: "banco", medio: "transferencia" },
-      { label: "Sueldos", value: -350000, date: monthDay(28), recurrence: "monthly", account: "banco", medio: "transferencia" },
-      { label: "Alquiler", value: -120000, date: monthDay(10), recurrence: "monthly", account: "banco", medio: "transferencia" },
-      { label: "Ventas mostrador", value: 180000, date: addDays(3), recurrence: "weekly", account: "efectivo", medio: "efectivo" },
-      { label: "Pago a proveedor", value: -80000, date: addDays(15), recurrence: "none", account: "efectivo", medio: "efectivo" },
+    // Primera vez (Calce normal, sin datos guardados): demo MÍNIMA.
+    // Solo para que la app no arranque en blanco. El ejemplo completo
+    // es el de la constructora (?demo=constructora).
+    state.accounts = [
+      { id: "acc-cc", name: "Cuenta corriente", banco: "Banco de la Nación Argentina", tipo: "cc", moneda: "ARS", alias: "", opening: 2000000 },
+      { id: "acc-caja", name: "Caja / Efectivo", banco: "", tipo: "efectivo", moneda: "ARS", alias: "", opening: 150000 },
     ];
-    demo.forEach(addMovement);
+    state.movements = [
+      { label: "Cobranza de cliente", amount: 800000, date: monthDay(20), recurrence: "monthly", medio: "transferencia", account: "acc-cc" },
+      { label: "Alquiler", amount: -250000, date: monthDay(10), recurrence: "monthly", medio: "transferencia", account: "acc-cc" },
+      { label: "Sueldos", amount: -450000, date: monthDay(5), recurrence: "monthly", medio: "transferencia", account: "acc-cc" },
+    ];
   }
 
   $("#add-mov").addEventListener("click", () => openMovModal());

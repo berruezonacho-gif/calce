@@ -55,7 +55,9 @@ const DEMO_CONSTRUCTORA = {
   // Colocadas con el excedente. Montos que salen de la caja sin dejarla corta.
   investments: [
     { tipo: "plazo_fijo", label: "Plazo fijo Nación 30d", monto: 8000000, account: "bna-cc", fechaColocacion: "d-5", fechaVenc: "d+25", rendimiento: 42, estado: "activa" },
-    { tipo: "fci", label: "FCI money market", monto: 6000000, account: "gali-ca", fechaColocacion: "d-2", fechaVenc: null, rendimiento: 38, estado: "activa" },
+    { tipo: "fci", label: "FCI money market", sociedad: "Galicia Administradora de Fondos", monto: 6000000, account: "gali-ca", fechaColocacion: "d-2", fechaVenc: null, rendimiento: 38, estado: "activa" },
+    { tipo: "fci", label: "FCI renta fija", sociedad: "Balanz Capital", monto: 4000000, account: "bna-cc", fechaColocacion: "d-8", fechaVenc: null, rendimiento: 45, estado: "activa" },
+    { tipo: "bono", label: "Bono TX26 (largo plazo)", sociedad: "BYMA", monto: 5000000, account: "bna-cc", fechaColocacion: "d-30", fechaVenc: "d+540", rendimiento: 12, estado: "activa" },
     { tipo: "dolares", label: "Tenencia en dólares", monto: 8000, account: "usd-ca", fechaColocacion: "d-10", fechaVenc: null, rendimiento: 0, estado: "activa" },
   ],
 
@@ -69,7 +71,8 @@ const DEMO_CONSTRUCTORA = {
     { tipo: "cobrar", contraparte: "Consorcio Edificio Centro", numero: "FC-A-0002-00040", monto: 9800000, account: "bna-cc", emision: "d-3", vencimiento: "d+30", categoria: "certificaciones", estado: "pendiente" },
     { tipo: "cobrar", contraparte: "Country Los Robles", numero: "FC-B-0003-00028", monto: 6300000, account: "bna-cc", emision: "d-2", vencimiento: "d+40", categoria: "ventas", estado: "pendiente" },
     // Por pagar — proveedores y subcontratistas (vencimientos escalonados)
-    { tipo: "pagar", contraparte: "Corralón El Constructor", numero: "FC-A-0044-00891", monto: 6800000, account: "bna-cc", emision: "d-10", vencimiento: "d+8", categoria: "materiales", estado: "pendiente" },
+    // Uno solo vencido (Corralón) como ejemplo; el resto por vencer.
+    { tipo: "pagar", contraparte: "Corralón El Constructor", numero: "FC-A-0044-00891", monto: 6800000, account: "bna-cc", emision: "d-33", vencimiento: "d-3", categoria: "materiales", estado: "pendiente" },
     { tipo: "pagar", contraparte: "Hormigonera Platense", numero: "FC-A-0012-00340", monto: 4200000, account: "bna-cc", emision: "d-15", vencimiento: "d+14", categoria: "materiales", estado: "pendiente" },
     { tipo: "pagar", contraparte: "Subcontratista Electricidad SRL", numero: "FC-A-0088-00105", monto: 3500000, account: "bna-cc", emision: "d-12", vencimiento: "d+20", categoria: "subcontratos", estado: "pendiente" },
     { tipo: "pagar", contraparte: "Aceros del Plata SA", numero: "FC-A-0021-00077", monto: 5100000, account: "bna-cc", emision: "d-6", vencimiento: "d+11", categoria: "materiales", estado: "pendiente" },

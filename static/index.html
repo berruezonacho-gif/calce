@@ -24,7 +24,6 @@
       <button class="nav-item" data-view="flujo">Flujo de caja</button>
       <button class="nav-item" data-view="saldos">Posición de caja</button>
       <button class="nav-item" data-view="comprobantes">Cobranzas y Pagos</button>
-      <button class="nav-item" data-view="escenarios">Escenarios</button>
       <div class="nav-dropdown">
         <button class="nav-item nav-drop-btn" data-group="inversiones">Inversiones <span class="caret">▾</span></button>
         <div class="nav-menu">
@@ -112,7 +111,6 @@
                 <div class="view-toggle grain-toggle" id="grain-toggle">
                   <button class="vt-btn" data-cfgrain="dia">Día</button>
                   <button class="vt-btn active" data-cfgrain="semana">Semana</button>
-                  <button class="vt-btn" data-cfgrain="mes">Mes</button>
                 </div>
               </div>
               <select id="cf-account-filter" class="cf-account-filter">
@@ -143,11 +141,6 @@
     <!-- Vista Cobranzas y Pagos (AR/AP) -->
     <section class="view hidden" id="view-comprobantes">
       <div class="comp-wrap" id="comp-wrap"></div>
-    </section>
-
-    <!-- Vista Escenarios (What-If) -->
-    <section class="view hidden" id="view-escenarios">
-      <div class="esc-wrap" id="esc-wrap"></div>
     </section>
 
     <!-- Vista Excedente -->
@@ -325,6 +318,9 @@
         </label>
         <label class="field"><span>Nombre / detalle</span>
           <input type="text" id="i-label" placeholder="Ej: Plazo fijo Nación 30 días">
+        </label>
+        <label class="field" id="i-sociedad-field"><span>Banco / Sociedad (dónde está)</span>
+          <input type="text" id="i-sociedad" placeholder="Ej: Galicia Administradora de Fondos">
         </label>
         <div class="modal-row">
           <label class="field"><span>Monto colocado</span>

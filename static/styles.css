@@ -1158,3 +1158,26 @@ input:focus, select:focus {
 .cfg-danger { color: var(--red); border-color: #F5C6C0; }
 .cfg-danger:hover { background: #FDECEA; }
 @media (max-width: 800px) { .cfg-layout { grid-template-columns: 1fr; } }
+
+/* Detalle de sociedad/cuenta en la cartera */
+.inv-soc { color: var(--slate-2); font-size: 11px; }
+.inv-acc { color: var(--slate); font-size: 11px; font-style: italic; }
+
+/* Lista de cobros y pagos del día (consultor) */
+.pagos-dia { margin-top: 16px; border-top: 1px solid var(--line-2); padding-top: 14px; }
+.pagos-dia h4 { font-size: 13px; font-weight: 600; color: var(--slate); margin-bottom: 10px; text-transform: uppercase; letter-spacing: .03em; }
+.pd-empty { font-size: 13px; color: var(--slate-2); }
+.pd-group { margin-bottom: 10px; }
+.pd-group-t { display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+.pd-group-t.in { color: var(--green); }
+.pd-group-t.out { color: var(--red); }
+.pd-item { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: baseline; padding: 6px 0; border-bottom: 1px dashed var(--line-2); }
+.pd-label { font-size: 13.5px; color: var(--ink); }
+.pd-acc { font-size: 11.5px; color: var(--slate-2); }
+.pd-monto { font-family: var(--mono); font-size: 13.5px; font-weight: 600; text-align: right; min-width: 110px; }
+.pd-monto.in { color: var(--green); }
+.pd-monto.out { color: var(--red); }
+.pd-neto { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 13.5px; }
+.pd-neto b { font-family: var(--mono); font-size: 15px; }
+.pd-neto b.in { color: var(--green); }
+.pd-neto b.out { color: var(--red); }
