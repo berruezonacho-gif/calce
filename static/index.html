@@ -62,6 +62,8 @@
             <div class="accounts-total" id="accounts-total"></div>
           </div>
 
+          <div class="ctrl-card" id="optimizar-card"></div>
+
           <div class="ctrl-card">
             <div class="ctrl-head">
               <h2>Movimientos</h2>
@@ -82,7 +84,6 @@
         <div class="result">
           <div class="kpi-row" id="kpi-row"></div>
           <div class="currency-tabs" id="currency-tabs"></div>
-          <div class="account-balances" id="account-balances"></div>
           <div class="table-card">
             <div class="chart-head cf-header">
               <h2>Flujo de caja</h2>
@@ -103,16 +104,7 @@
               </div>
             </div>
             <div class="cf-subbar">
-              <div class="cf-subbar-left">
-                <div class="view-toggle mode-toggle">
-                  <button class="vt-btn active" data-cfmode="grilla">▦ Grilla</button>
-                  <button class="vt-btn" data-cfmode="detalle">☰ Detalle</button>
-                </div>
-                <div class="view-toggle grain-toggle" id="grain-toggle">
-                  <button class="vt-btn" data-cfgrain="dia">Día</button>
-                  <button class="vt-btn active" data-cfgrain="semana">Semana</button>
-                </div>
-              </div>
+              <div class="cf-subbar-left"></div>
               <select id="cf-account-filter" class="cf-account-filter">
                 <option value="">Todas las cuentas</option>
               </select>

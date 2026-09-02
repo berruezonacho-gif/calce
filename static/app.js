@@ -510,6 +510,7 @@ function renderAccounts() {
       <div class="acc-bal-today">${moneyC(balToday(a), a.moneda)}</div>
     </div>`).join("");
   renderAccountsTotal();
+  renderOptimizar();
 }
 
 function bancoShort(banco) {
@@ -517,6 +518,77 @@ function bancoShort(banco) {
   const m = banco.match(/\(([^)]+)\)/);
   if (m) return m[1];
   return banco.replace(/^Banco (de la |de |del )?/, "").split(" ").slice(0, 2).join(" ");
+}
+
+// ── Optimizar liquidez ociosa ────────────────────────────
+// Muestra la plata parada en cada cuenta bancaria (no efectivo) y ofrece
+// colocarla en un FCI money market del mismo banco (rescatable al otro día).
+function renderOptimizar() {
+  const card = $("#optimizar-card");
+  if (!card) return;
+  // Cuentas bancarias ARS con saldo positivo hoy (excluye efectivo)
+  const cuentas = state.accounts
+    .filter(a => a.moneda === "ARS" && a.tipo !== "efectivo")
+    .map(a => ({ acc: a, ocioso: saldoCuentaAFecha(a) }))
+    .filter(x => x.ocioso > 0);
+
+  const totalOcioso = cuentas.reduce((s,x) => s + x.ocioso, 0);
+
+  if (!cuentas.length) {
+    card.innerHTML = `<div class="ctrl-head"><h2>Optimizar liquidez</h2></div>
+      <p class="mov-hint-panel">No hay liquidez ociosa para colocar ahora.</p>`;
+    return;
+  }
+
+  card.innerHTML = `
+    <div class="ctrl-head"><h2>Optimizar liquidez</h2></div>
+    <p class="opt-intro">Tenés <b>${moneyC(totalOcioso,"ARS")}</b> en cuentas sin colocar. Un FCI money market rinde y se rescata al otro día.</p>
+    <div class="opt-list">
+      ${cuentas.map(x => `
+        <div class="opt-row">
+          <div class="opt-row-info">
+            <b>${h(x.acc.name)}</b>
+            <small>${h(bancoShort(x.acc.banco))}</small>
+          </div>
+          <div class="opt-row-right">
+            <span class="opt-monto">${moneyC(x.ocioso,"ARS")}</span>
+            <button class="opt-colocar-btn" data-acc="${x.acc.id}">Colocar en FCI</button>
+          </div>
+        </div>`).join("")}
+    </div>`;
+
+  $$(".opt-colocar-btn").forEach(b => b.onclick = () => colocarEnFCI(b.dataset.acc));
+}
+
+// Abre el modal de inversión pre-cargado para colocar el ocioso de una cuenta
+function colocarEnFCI(accId) {
+  const acc = state.accounts.find(a => a.id === accId);
+  if (!acc) return;
+  const ocioso = saldoCuentaAFecha(acc);
+  openInvModal();
+  // Pre-cargar: tipo FCI, cuenta, monto ocioso, sociedad sugerida del banco
+  $("#i-tipo").value = "fci";
+  updateInvTipo();
+  $("#i-account").value = accId;
+  updateInvTipo();
+  $("#i-monto").value = Math.max(0, Math.round(ocioso));
+  $("#i-label").value = "FCI money market";
+  $("#i-sociedad").value = sugerirSociedadFCI(acc.banco);
+  $("#i-rend").value = 40; // TNA de referencia money market
+  updateInvPreview();
+}
+
+// Sugiere la sociedad gerente de FCI según el banco
+function sugerirSociedadFCI(banco) {
+  const b = (banco || "").toLowerCase();
+  if (b.includes("galicia")) return "Galicia Administradora de Fondos";
+  if (b.includes("nación") || b.includes("nacion")) return "Pellegrini (Banco Nación)";
+  if (b.includes("provincia")) return "Provinfondos (Banco Provincia)";
+  if (b.includes("santander")) return "Santander Asset Management";
+  if (b.includes("bbva")) return "BBVA Asset Management";
+  if (b.includes("macro")) return "Macro Fondos";
+  if (b.includes("credicoop")) return "Credicoop (IMSA)";
+  return "FCI money market";
 }
 
 function tipoLabel(tipo) {
@@ -634,6 +706,7 @@ async function project() {
   saveState();
   renderMovSummary();
   renderAccountsTotal();
+  renderOptimizar();
   renderCurrencyTabs();
 
   const filterAcct = state.cfAccount; // "" = consolidado de la moneda activa
@@ -698,45 +771,20 @@ function renderCurrencyTabs() {
 function renderAccountBalances() {
   const el = $("#account-balances");
   if (!el) return;
-  const horizon = parseInt($("#horizon").value, 10);
-  const end = new Date(); end.setDate(end.getDate() + horizon);
-  const start = new Date(); start.setHours(0,0,0,0);
   const ccy = state.cfCurrency;
 
-  // Solo las cuentas de la moneda activa
+  // Solo las cuentas de la moneda activa. Muestra el SALDO DE HOY (real).
   const accts = state.accounts.filter((a) => a.moneda === ccy);
-  const balances = accts.map((a) => {
-    let bal = parseFloat(a.opening) || 0;
-    state.movements.forEach((m) => {
-      if (m.account !== a.id || !m.amount || !m.date) return;
-      const base = new Date(m.date + "T00:00:00");
-      if (m.recurrence === "none") {
-        if (base >= start && base <= end) bal += m.amount;
-      } else {
-        let d = new Date(base), guard = 0;
-        while (d <= end && guard < 500) {
-          if (d >= start) bal += m.amount;
-          if (m.recurrence === "weekly") d.setDate(d.getDate() + 7);
-          else if (m.recurrence === "quincenal") d.setDate(d.getDate() + 14);
-          else if (m.recurrence === "monthly") d.setMonth(d.getMonth() + 1);
-          else if (m.recurrence === "quarterly") d.setMonth(d.getMonth() + 3);
-          else break;
-          guard++;
-        }
-      }
-    });
-    return { ...a, projected: bal };
-  });
+  const balances = accts.map((a) => ({ ...a, hoy: saldoCuentaAFecha(a) }));
 
   el.innerHTML = balances.map((a) => `
     <button class="acct-balance ${state.cfAccount === a.id ? "active" : ""}" data-acct="${a.id}">
       <small>${h(a.name)}</small>
-      <b>${moneyC(a.projected, ccy)}</b>
-      <span>al cierre</span>
+      <b>${moneyC(a.hoy, ccy)}</b>
     </button>`).join("") +
     (balances.length > 1 ? `<button class="acct-balance total ${!state.cfAccount ? "active" : ""}" data-acct="">
-      <small>Consolidado ${ccySymbol(ccy)}</small>
-      <b>${moneyC(balances.reduce((s, a) => s + a.projected, 0), ccy)}</b>
+      <small>Saldo hoy ${ccySymbol(ccy)}</small>
+      <b>${moneyC(balances.reduce((s, a) => s + a.hoy, 0), ccy)}</b>
       <span>todas en ${ccy}</span>
     </button>` : "");
 
@@ -918,16 +966,8 @@ function wireChartHover(days, X, Y, P, iw) {
 // ── Tabla estilo Excel (día / semana, con detalle) ──────
 function renderCashflowTable() {
   const { from, to } = cfRangeDates();
-  const mode = state.cfMode || "grilla";
-  if (mode === "grilla") {
-    // La grilla se muestra por semana (día se ve en modo Detalle)
-    return renderGrid(from, to, "semana");
-  }
-  // Modo detalle: día o semana
-  const grain = (state.cfGrain === "dia") ? "dia" : "semana";
-  const days = computeDaySeries(from, to);
-  if (grain === "semana") return renderTableWeekly(days);
-  return renderTableDaily(days);
+  // Siempre grilla semanal (el modo Detalle se eliminó)
+  return renderGrid(from, to, "semana");
 }
 
 // Genera los períodos (columnas) entre from y to según el grano
@@ -4300,27 +4340,6 @@ function init() {
   }
 
   // Toggle día / semana en la tabla
-  // Toggle de modo (grilla / detalle)
-  $$(".mode-toggle .vt-btn").forEach((b) =>
-    b.addEventListener("click", () => {
-      state.cfMode = b.dataset.cfmode;
-      $$(".mode-toggle .vt-btn").forEach((x) => x.classList.toggle("active", x.dataset.cfmode === state.cfMode));
-      // El grano "día" solo aplica al detalle; en grilla forzamos semana
-      const grainBtns = $$("#grain-toggle .vt-btn");
-      const diaBtn = grainBtns.find(x => x.dataset.cfgrain === "dia");
-      if (diaBtn) diaBtn.style.display = state.cfMode === "grilla" ? "none" : "";
-      renderCashflowTable();
-    })
-  );
-  // Toggle de grano (día / semana / mes)
-  $$("#grain-toggle .vt-btn").forEach((b) =>
-    b.addEventListener("click", () => {
-      state.cfGrain = b.dataset.cfgrain;
-      $$("#grain-toggle .vt-btn").forEach((x) => x.classList.toggle("active", x.dataset.cfgrain === state.cfGrain));
-      renderCashflowTable();
-    })
-  );
-
   // Botones rápidos de período
   $$("#cf-quick .qk").forEach((b) =>
     b.addEventListener("click", () => {

@@ -1181,3 +1181,15 @@ input:focus, select:focus {
 .pd-neto b { font-family: var(--mono); font-size: 15px; }
 .pd-neto b.in { color: var(--green); }
 .pd-neto b.out { color: var(--red); }
+
+/* ═══ Optimizar liquidez ociosa ═══════════════════════════ */
+.opt-intro { font-size: 12.5px; color: var(--slate); margin-bottom: 12px; line-height: 1.5; }
+.opt-intro b { color: var(--navy); }
+.opt-list { display: flex; flex-direction: column; gap: 8px; }
+.opt-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; }
+.opt-row-info b { display: block; font-size: 13px; }
+.opt-row-info small { font-size: 11px; color: var(--slate-2); }
+.opt-row-right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+.opt-monto { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--navy); }
+.opt-colocar-btn { background: var(--accent); color: #fff; border: none; border-radius: 7px; padding: 5px 12px; font-family: "Inter", sans-serif; font-size: 11.5px; font-weight: 600; cursor: pointer; transition: .12s; white-space: nowrap; }
+.opt-colocar-btn:hover { filter: brightness(1.08); }
