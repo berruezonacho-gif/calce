@@ -104,9 +104,11 @@
               </div>
             </div>
             <div class="cf-subbar">
-              <div class="cf-subbar-left"></div>
+              <div class="cf-subbar-left">
+                <label class="cf-acct-label">Ver cuenta:</label>
+              </div>
               <select id="cf-account-filter" class="cf-account-filter">
-                <option value="">Todas las cuentas</option>
+                <option value="">Todas las cuentas (consolidado)</option>
               </select>
             </div>
             <div id="cf-table"></div>
@@ -328,6 +330,14 @@
           </label>
           <label class="field" id="i-venc-field"><span>Fecha de vencimiento</span>
             <input type="date" id="i-venc">
+          </label>
+          <label class="field" id="i-rescate-field"><span>Plazo de rescate</span>
+            <select id="i-rescate">
+              <option value="0">T+0 · mismo día (money market)</option>
+              <option value="1">T+1 · 24 hs hábiles</option>
+              <option value="2">T+2 · 48 hs hábiles</option>
+            </select>
+            <small>Cuántos días tarda en volver la plata cuando lo rescatás.</small>
           </label>
         </div>
         <label class="field"><span id="i-rend-label">Rendimiento esperado (TNA %)</span>

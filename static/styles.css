@@ -108,34 +108,42 @@ body {
 }
 .add-btn:hover { background: #DCE7FD; }
 
-.field { display: block; margin-bottom: 16px; }
+.field { display: block; margin-bottom: 18px; }
 .field:last-child { margin-bottom: 0; }
 .field > span {
-  display: block; font-size: 12.5px; font-weight: 500;
-  color: var(--slate); margin-bottom: 6px;
+  display: block; font-size: 11px; font-weight: 600;
+  color: var(--slate-2); margin-bottom: 7px;
+  text-transform: uppercase; letter-spacing: .04em;
 }
-.field small { display: block; margin-top: 5px; font-size: 11.5px; color: var(--slate-2); }
+.field small { display: block; margin-top: 6px; font-size: 11.5px; color: var(--slate-2); line-height: 1.4; }
 .money-input { position: relative; display: flex; align-items: center; }
 .money-input em {
-  position: absolute; left: 12px; font-style: normal;
-  color: var(--slate-2); font-size: 14px;
+  position: absolute; left: 14px; font-style: normal;
+  color: var(--slate); font-size: 14px; font-weight: 600; z-index: 1;
 }
-.money-input input { padding-left: 26px; }
+.money-input input { padding-left: 30px; }
 input, select {
   width: 100%;
-  font-family: var(--mono); font-size: 14px;
+  font-family: var(--mono); font-size: 14.5px;
   color: var(--ink);
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px 12px;
-  transition: .15s;
+  background: #fff;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  transition: border-color .15s, box-shadow .15s, background .15s;
 }
-select { font-family: "Inter", sans-serif; }
+input::placeholder { color: #B8C2CE; }
+select { font-family: "Inter", sans-serif; cursor: pointer; appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2364748B' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 14px center; padding-right: 34px; }
+input:hover, select:hover { border-color: #C7D2DE; }
 input:focus, select:focus {
   outline: none; border-color: var(--accent);
-  background: #fff; box-shadow: 0 0 0 3px var(--accent-bg);
+  background: #fff; box-shadow: 0 0 0 3.5px var(--accent-bg);
 }
+.pct-input { position: relative; display: flex; align-items: center; }
+.pct-input em { position: absolute; right: 14px; font-style: normal; color: var(--slate); font-weight: 600; }
+.pct-input input { padding-right: 30px; }
 
 /* ── Movimientos ────────────────────────────────────────── */
 .mov-list { display: flex; flex-direction: column; gap: 10px; }
@@ -1193,3 +1201,17 @@ input:focus, select:focus {
 .opt-monto { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--navy); }
 .opt-colocar-btn { background: var(--accent); color: #fff; border: none; border-radius: 7px; padding: 5px 12px; font-family: "Inter", sans-serif; font-size: 11.5px; font-weight: 600; cursor: pointer; transition: .12s; white-space: nowrap; }
 .opt-colocar-btn:hover { filter: brightness(1.08); }
+
+/* Etiqueta del selector de cuenta en el flujo */
+.cf-acct-label { font-size: 13px; font-weight: 600; color: var(--slate); margin-right: 8px; }
+.cf-subbar { display: flex; align-items: center; gap: 8px; }
+.cf-subbar-left { display: flex; align-items: center; }
+.cf-account-filter { flex: 1; max-width: 340px; }
+
+/* Monto editable en el calendario de impuestos */
+.ical-monto-edit { position: relative; display: flex; align-items: center; }
+.ical-monto-edit em { position: absolute; left: 10px; font-style: normal; color: var(--slate); font-weight: 600; font-size: 13px; }
+.ical-monto-input { width: 150px; font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--red); padding: 8px 10px 8px 22px; text-align: right; border: 1.5px solid transparent; background: transparent; }
+.ical-monto-input:hover { border-color: var(--line); background: #fff; }
+.ical-monto-input:focus { border-color: var(--accent); background: #fff; }
+.ical-hint { font-size: 11.5px; color: var(--slate-2); margin: 4px 0 12px; }

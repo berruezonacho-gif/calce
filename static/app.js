@@ -45,15 +45,27 @@ const TIPOS_CUENTA = [
 
 // Tipos de inversión / colocación
 const TIPOS_INVERSION = [
-  { v: "plazo_fijo", label: "Plazo fijo", tieneVenc: true },
-  { v: "fci", label: "FCI (fondo común)", tieneVenc: false },
-  { v: "dolares", label: "Dólares", tieneVenc: false },
-  { v: "bono", label: "Bono", tieneVenc: true },
-  { v: "caucion", label: "Caución", tieneVenc: true },
+  { v: "plazo_fijo", label: "Plazo fijo", tieneVenc: true, rescateDias: null },
+  { v: "fci", label: "FCI (fondo común)", tieneVenc: false, rescateDias: 0 },
+  { v: "dolares", label: "Dólares", tieneVenc: false, rescateDias: 0 },
+  { v: "bono", label: "Bono", tieneVenc: true, rescateDias: null },
+  { v: "caucion", label: "Caución", tieneVenc: true, rescateDias: null },
 ];
 function tipoInvLabel(v) {
   const t = TIPOS_INVERSION.find((x) => x.v === v);
   return t ? t.label : v;
+}
+// Plazo de rescate sugerido por tipo (días hábiles aprox.). Los FCI money
+// market liquidan T+0 (mismo día); otros FCI suelen T+1. Editable por el usuario.
+function rescateSugerido(tipo, label) {
+  const l = (label || "").toLowerCase();
+  if (tipo === "fci") {
+    if (l.includes("money market") || l.includes("mercado de dinero") || l.includes("plazo") === false && l.includes("liquidez")) return 0;
+    if (l.includes("renta fija") || l.includes("renta") || l.includes("ahorro")) return 1;
+    return 0; // por defecto money market
+  }
+  if (tipo === "dolares") return 0;
+  return null; // plazo fijo, bono, caución: vuelven al vencimiento
 }
 
 // ── Categorías del cash flow ─────────────────────────────
@@ -166,6 +178,7 @@ function saveState() {
         investments: state.investments,
         comprobantes: state.comprobantes,
         proveedores: state.proveedores,
+        impMontos: state.impMontos,
         accounts: state.accounts,
         empresa: state.empresa,
         prefs: state.prefs,
@@ -186,6 +199,7 @@ function loadState() {
     if (s.investments) state.investments = s.investments;
     if (s.comprobantes) state.comprobantes = s.comprobantes;
     if (s.proveedores) state.proveedores = s.proveedores;
+    if (s.impMontos) state.impMontos = s.impMontos;
     if (s.accounts) state.accounts = s.accounts;
     if (s.empresa) state.empresa = s.empresa;
     if (s.prefs) state.prefs = s.prefs;
@@ -645,7 +659,7 @@ function syncAccountSelectors() {
   const fSel = $("#cf-account-filter");
   if (fSel) {
     const cur = fSel.value;
-    fSel.innerHTML = `<option value="">Todas las cuentas</option>` + opts;
+    fSel.innerHTML = `<option value="">Todas las cuentas (consolidado)</option>` + opts;
     fSel.value = state.accounts.find(a=>a.id===cur) ? cur : "";
   }
 }
@@ -966,8 +980,17 @@ function wireChartHover(days, X, Y, P, iw) {
 // ── Tabla estilo Excel (día / semana, con detalle) ──────
 function renderCashflowTable() {
   const { from, to } = cfRangeDates();
-  // Siempre grilla semanal (el modo Detalle se eliminó)
-  return renderGrid(from, to, "semana");
+  // Grano adaptativo: períodos cortos (hoy/semana) → por día; largos → por semana.
+  const r = state.cfRange || "mes";
+  const usaRangoCustom = state.cfFrom && state.cfTo;
+  let grain = "semana";
+  if (!usaRangoCustom && (r === "hoy" || r === "semana")) grain = "dia";
+  else if (usaRangoCustom) {
+    // Si el rango custom es <= 10 días, mostrar por día
+    const dias = Math.round((new Date(to) - new Date(from)) / 86400000);
+    grain = dias <= 10 ? "dia" : "semana";
+  }
+  return renderGrid(from, to, grain);
 }
 
 // Genera los períodos (columnas) entre from y to según el grano
@@ -975,7 +998,16 @@ function buildPeriods(fromISO, toISO, grain) {
   const from = new Date(fromISO + "T00:00:00");
   const to = new Date(toISO + "T00:00:00");
   const periods = [];
-  if (grain === "mes") {
+  const dias3 = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+  if (grain === "dia") {
+    let d = new Date(from);
+    while (d <= to) {
+      const start = new Date(d);
+      const end = new Date(d);
+      periods.push({ start, end, label: `${dias3[start.getDay()]} ${start.getDate()}/${start.getMonth()+1}` });
+      d.setDate(d.getDate() + 1);
+    }
+  } else if (grain === "mes") {
     let d = new Date(from.getFullYear(), from.getMonth(), 1);
     while (d <= to) {
       const start = new Date(d);
@@ -989,7 +1021,7 @@ function buildPeriods(fromISO, toISO, grain) {
     while (d <= to) {
       const start = new Date(d);
       const end = new Date(d); end.setDate(end.getDate() + 6);
-      periods.push({ start, end, label: `${start.getDate()}/${start.getMonth()+1}` });
+      periods.push({ start, end, label: `${dias3[start.getDay()]} ${start.getDate()}/${start.getMonth()+1}` });
       d.setDate(d.getDate() + 7);
     }
   }
@@ -1110,11 +1142,13 @@ function renderGrid(fromISO, toISO, grain) {
 
   const colHead = periods.map(p=>`<th class="grid-per">${p.label}</th>`).join("");
 
+  const cornerLabel = grain === "dia" ? "Día" : grain === "mes" ? "Mes" : "Semana del";
+
   $("#cf-table").innerHTML = `
     <div class="cf-table-scroll grid-scroll">
       <table class="cf-grid">
         <thead><tr>
-          <th class="grid-corner">${grain==="mes"?"Mes":"Semana"} →</th>
+          <th class="grid-corner">${cornerLabel}</th>
           ${colHead}
           <th class="grid-per grid-total-h">Total</th>
         </tr></thead>
@@ -1130,7 +1164,7 @@ function renderGrid(fromISO, toISO, grain) {
         </tbody>
       </table>
     </div>
-    <div class="cf-table-foot"><span>${fmtDateShort(fromISO)} a ${fmtDateShort(toISO)} · tocá una categoría para ver el detalle</span></div>`;
+    <div class="cf-table-foot"><span>${fmtDateShort(fromISO)} a ${fmtDateShort(toISO)} · ${grain==="dia"?"cada columna es un día":"cada columna es la semana que arranca esa fecha"} · tocá una categoría para ver el detalle</span></div>`;
 
   // Expandir categoría → mostrar movimientos individuales
   $$(".grid-cat").forEach((row) => {
@@ -1322,7 +1356,11 @@ function cfRangeDates() {
   const r = state.cfRange || "mes";
   const from = new Date(today), to = new Date(today);
   if (r === "hoy") { /* from=to=hoy */ }
-  else if (r === "semana") { from.setDate(today.getDate() - ((today.getDay()+6)%7)); to.setDate(from.getDate()+6); }
+  else if (r === "semana") {
+    from.setDate(today.getDate() - ((today.getDay()+6)%7)); // lunes de esta semana
+    to.setTime(from.getTime());
+    to.setDate(from.getDate()+6); // domingo
+  }
   else if (r === "mes") { from.setDate(1); to.setMonth(to.getMonth()+1); to.setDate(0); }
   else if (r === "90") { to.setDate(today.getDate()+90); }
   else if (r === "pasado") { from.setDate(today.getDate()-180); }
@@ -2295,17 +2333,11 @@ function renderSaldos() {
   };
 
   // Tabla de cuentas: saldo hoy + hace 30 días + variación
-  const hace30 = new Date(); hace30.setDate(hace30.getDate()-30);
-  const iso30 = hace30.toISOString().slice(0,10);
   const filaCuenta = (a) => {
     const hoy = saldoCuentaAFecha(a);
-    const antes = saldoCuentaAFecha(a, iso30);
-    const vari = hoy - antes;
     return `<tr>
       <td class="sc-name"><b>${h(a.name)}</b><small>${a.tipo === "efectivo" ? "Efectivo" : h(bancoShort(a.banco)) + " · " + tipoLabel(a.tipo)}</small></td>
-      <td class="mono">${moneyC(antes, a.moneda)}</td>
       <td class="mono ${hoy < 0 ? "neg" : ""}">${moneyC(hoy, a.moneda)}</td>
-      <td class="mono ${vari > 0 ? "in" : vari < 0 ? "out" : "muted"}">${vari ? (vari>0?"+":"−") + moneyC(Math.abs(vari), a.moneda) : "—"}</td>
     </tr>`;
   };
 
@@ -2346,7 +2378,7 @@ function renderSaldos() {
       <div class="chart-head"><h2>Saldo por cuenta</h2></div>
       <div class="cf-table-scroll">
         <table class="cf-table">
-          <thead><tr><th>Cuenta</th><th>Hace 30 días</th><th>Saldo hoy</th><th>Variación</th></tr></thead>
+          <thead><tr><th>Cuenta</th><th>Saldo hoy</th></tr></thead>
           <tbody>${state.accounts.map(filaCuenta).join("")}</tbody>
         </table>
       </div>
@@ -2605,13 +2637,18 @@ function renderCartera() {
   const filaInv = (inv) => {
     const retorno = estimarRetorno(inv);
     const ganancia = retorno - (parseFloat(inv.monto) || 0);
-    const venc = inv.fechaVenc ? fmtDateFull(inv.fechaVenc) : "Sin vencimiento";
     const diasRest = inv.fechaVenc
       ? Math.round((new Date(inv.fechaVenc+"T00:00:00") - new Date()) / 86400000)
       : null;
-    const vencInfo = diasRest !== null
-      ? (diasRest >= 0 ? `${venc} · en ${diasRest} días` : `${venc} · vencida`)
-      : venc;
+    let vencInfo;
+    if (inv.fechaVenc) {
+      const venc = fmtDateFull(inv.fechaVenc);
+      vencInfo = diasRest >= 0 ? `${venc} · en ${diasRest} días` : `${venc} · vencida`;
+    } else {
+      // Sin vencimiento: mostrar el plazo de rescate
+      const pr = inv.plazoRescate != null ? inv.plazoRescate : rescateSugerido(inv.tipo, inv.label);
+      vencInfo = pr === 0 ? "Rescate T+0 (mismo día)" : pr === 1 ? "Rescate T+1 (24 hs)" : pr != null ? `Rescate T+${pr}` : "Sin vencimiento";
+    }
     const activa = invActiva(inv);
     const acciones = activa
       ? `<button class="inv-rescatar-btn" data-resc="${inv.id}" title="Traer la plata de vuelta a la cuenta">Rescatar</button>
@@ -2688,17 +2725,20 @@ function rescatarInversion(id) {
   if (txt === null) return;
   const monto = parseFloat(txt);
   if (!monto || monto <= 0) { alert("Ingresá un monto válido."); return; }
+  // Fecha en que la plata efectivamente entra: hoy + plazo de rescate
+  const pr = inv.plazoRescate != null ? inv.plazoRescate : (rescateSugerido(inv.tipo, inv.label) || 0);
+  const fechaEntra = addDaysToISO(hoy, pr);
   // Marcar como rescatada
   inv.estado = "rescatada";
   inv.fechaRescate = hoy;
   inv.montoRescate = monto;
   // Si tenía un rescate automático futuro (plazo fijo con vencimiento), lo quitamos
   state.movements = state.movements.filter((m) => !(m.invId === inv.id && m.movTipo === "rescate"));
-  // Generar el ingreso real del rescate hoy
+  // Generar el ingreso del rescate en la fecha de liquidación
   state.movements.push({
-    label: `Rescate: ${inv.label}`,
+    label: pr > 0 ? `Rescate: ${inv.label} (liquida en T+${pr})` : `Rescate: ${inv.label}`,
     amount: Math.abs(monto),
-    date: hoy, recurrence: "none",
+    date: fechaEntra, recurrence: "none",
     medio: "transferencia", account: inv.account,
     invId: inv.id, movTipo: "rescate",
   });
@@ -2735,6 +2775,16 @@ function updateInvTipo() {
   $("#i-cur").textContent = acc && acc.moneda === "USD" ? "US$" : "$";
   // Mostrar/ocultar vencimiento según el tipo
   $("#i-venc-field").style.display = tipo && tipo.tieneVenc ? "" : "none";
+  // El plazo de rescate solo aplica a instrumentos SIN vencimiento (FCI, dólares)
+  const rescField = $("#i-rescate-field");
+  if (rescField) {
+    rescField.style.display = tipo && !tipo.tieneVenc ? "" : "none";
+    // Sugerir el plazo por defecto del tipo
+    if (tipo && !tipo.tieneVenc) {
+      const sug = rescateSugerido(tipo.v, $("#i-label").value);
+      $("#i-rescate").value = String(sug != null ? sug : 0);
+    }
+  }
   // Ajustar label del rendimiento
   if (tipo && tipo.tieneVenc) {
     $("#i-rend-label").textContent = "Rendimiento esperado (TNA %)";
@@ -2786,6 +2836,7 @@ function saveInvFromModal() {
   const inv = {
     id: invId(), tipo, label, monto: Math.abs(monto),
     sociedad: $("#i-sociedad").value.trim(),
+    plazoRescate: tipoDef && !tipoDef.tieneVenc ? (parseInt($("#i-rescate").value) || 0) : null,
     moneda: acc ? acc.moneda : "ARS", account,
     fechaColocacion: fecha, fechaVenc: venc,
     rendimiento: rend, estado: "activa",
@@ -3623,19 +3674,21 @@ async function renderFCI() {
 // Genera los próximos vencimientos con monto estimado desde los movimientos.
 function proximosVencimientosImpositivos() {
   const hoy = new Date(); hoy.setHours(0,0,0,0);
-  // Estimar montos típicos desde los movimientos de impuestos cargados,
-  // o usar los últimos valores conocidos.
-  const buscarMonto = (kws, def) => {
+  // Montos: primero un override manual del usuario (state.impMontos), luego lo
+  // estimado desde los movimientos, luego un default.
+  const overrides = state.impMontos || {};
+  const buscarMonto = (cat, kws, def) => {
+    if (overrides[cat] != null) return overrides[cat];
     const m = state.movements.find(x => {
       const t = (x.label||"").toLowerCase();
       return x.amount < 0 && kws.some(k => t.includes(k));
     });
     return m ? Math.abs(m.amount) : def;
   };
-  const montoIVA = buscarMonto(["iva"], 4100000);
-  const montoIIBB = buscarMonto(["iibb","ingresos brutos","arba"], 1500000);
-  const montoGanancias = buscarMonto(["ganancias"], 2200000);
-  const montoCargas = buscarMonto(["cargas","suss","931","afip"], 6200000);
+  const montoIVA = buscarMonto("iva", ["iva"], 4100000);
+  const montoIIBB = buscarMonto("iibb", ["iibb","ingresos brutos","arba"], 1500000);
+  const montoGanancias = buscarMonto("ganancias", ["ganancias"], 2200000);
+  const montoCargas = buscarMonto("cargas", ["cargas","suss","931"], 6200000);
 
   // Definición de impuestos y su día de vencimiento mensual (aprox.)
   const defs = [
@@ -3694,11 +3747,25 @@ function renderCalendarioImpuestos() {
               <b>${v.concepto}</b>
               <span class="ical-org" style="color:${catColor[v.cat]||'#64748B'}">${v.org} · ${v.dias===0?"vence hoy":`en ${v.dias} días`}</span>
             </div>
-            <div class="ical-monto">${money(v.monto)}</div>
+            <div class="ical-monto-edit">
+              <em>$</em><input type="number" class="ical-monto-input" data-cat="${v.cat}" value="${Math.round(v.monto)}" step="100000">
+            </div>
           </div>`).join("")}
       </div>
+      <p class="ical-hint">Podés ajustar cualquier monto — se guarda automáticamente.</p>
       <button class="btn-primary sm" id="imp-cal-tocashflow">Llevar estos vencimientos al flujo de caja →</button>
     </div>`;
+
+  // Editar montos → guardar override por categoría
+  $$(".ical-monto-input").forEach(inp => {
+    inp.onchange = () => {
+      if (!state.impMontos) state.impMontos = {};
+      const val = parseFloat(inp.value);
+      if (val > 0) state.impMontos[inp.dataset.cat] = val;
+      saveState();
+      renderCalendarioImpuestos();
+    };
+  });
 
   $("#imp-cal-tocashflow").onclick = () => {
     let n = 0;
