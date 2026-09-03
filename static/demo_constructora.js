@@ -24,7 +24,9 @@ const DEMO_CONSTRUCTORA = {
     { id: "gali-ca",  name: "Caja de ahorro haberes",     banco: "Banco de Galicia y Buenos Aires (Galicia)", tipo: "ca", moneda: "ARS", alias: "constplata.sueldos", opening: 18000000 },
     { id: "prov-cc",  name: "Cuenta obra pública",        banco: "Banco de la Provincia de Buenos Aires (Provincia)", tipo: "cc", moneda: "ARS", alias: "constplata.obrapublica", opening: 15000000 },
     { id: "usd-ca",   name: "Caja de ahorro USD",         banco: "Banco de la Nación Argentina", tipo: "ca", moneda: "USD", alias: "constplata.usd", opening: 12000 },
-    { id: "caja",     name: "Caja chica de obra",         banco: "", tipo: "efectivo", moneda: "ARS", alias: "", opening: 1500000 },
+    { id: "caja",     name: "Efectivo",                   banco: "", tipo: "efectivo", moneda: "ARS", alias: "", opening: 9500000 },
+    { id: "caja-usd", name: "Efectivo en dólares",        banco: "", tipo: "efectivo", moneda: "USD", alias: "", opening: 35000 },
+    { id: "comitente", name: "Comitente Balanz",          banco: "", tipo: "comitente", moneda: "ARS", alias: "45210", broker: "Balanz Capital", opening: 5000000 },
   ],
   // Los montos son mensuales/recurrentes salvo aclaración.
   // account por id. medio: transferencia / cheque / efectivo / tarjeta
@@ -46,9 +48,19 @@ const DEMO_CONSTRUCTORA = {
     { label: "Seguros (ART, obra, vehículos)", amount: -1900000, date: "d+9", recurrence: "monthly", medio: "transferencia", account: "bna-cc" },
     { label: "Honorarios estudio contable", amount: -650000, date: "d+11", recurrence: "monthly", medio: "transferencia", account: "bna-cc" },
     { label: "Servicios (luz, agua, internet)", amount: -480000, date: "d+14", recurrence: "monthly", medio: "transferencia", account: "bna-cc" },
-    { label: "Caja chica de obra (reposición)", amount: -600000, date: "d+13", recurrence: "monthly", medio: "efectivo", account: "caja" },
+    { label: "Reposición de efectivo (desde banco)", amount: -600000, date: "d+13", recurrence: "monthly", medio: "efectivo", account: "caja" },
     { label: "Alquiler grúa y encofrados", amount: -2100000, date: "d+7", recurrence: "monthly", medio: "transferencia", account: "bna-cc" },
     { label: "Cuota leasing camioneta", amount: -780000, date: "d+15", recurrence: "monthly", medio: "transferencia", account: "bna-cc" },
+
+    // ── MOVIMIENTOS EN EFECTIVO (típicos de obra) ───────────
+    { label: "Jornales changarines (efectivo)", amount: -1800000, date: "d+6", recurrence: "monthly", medio: "efectivo", account: "caja" },
+    { label: "Compra materiales al contado", amount: -1200000, date: "d+11", recurrence: "monthly", medio: "efectivo", account: "caja" },
+    { label: "Viáticos y gastos de obra", amount: -450000, date: "d+4", recurrence: "monthly", medio: "efectivo", account: "caja" },
+    { label: "Cobro anticipo cliente (efectivo)", amount: 3000000, date: "d+16", recurrence: "none", medio: "efectivo", account: "caja" },
+
+    // ── MOVIMIENTOS EN DÓLARES FÍSICOS ──────────────────────
+    { label: "Pago proveedor importado (USD efectivo)", amount: -8000, date: "d+21", recurrence: "none", medio: "efectivo", account: "caja-usd" },
+    { label: "Cobro seña terreno (USD efectivo)", amount: 15000, date: "d+28", recurrence: "none", medio: "efectivo", account: "caja-usd" },
   ],
 
   // ── INVERSIONES YA HECHAS ────────────────────────────────

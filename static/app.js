@@ -41,6 +41,7 @@ const TIPOS_CUENTA = [
   { v: "ca", label: "Caja de ahorro" },
   { v: "cc", label: "Cuenta corriente" },
   { v: "efectivo", label: "Efectivo / Caja" },
+  { v: "comitente", label: "Cuenta comitente (inversión)" },
 ];
 
 // Tipos de inversión / colocación
@@ -537,16 +538,51 @@ function bancoShort(banco) {
 // ── Optimizar liquidez ociosa ────────────────────────────
 // Muestra la plata parada en cada cuenta bancaria (no efectivo) y ofrece
 // colocarla en un FCI money market del mismo banco (rescatable al otro día).
+// Suma los pagos (egresos) de una cuenta en los próximos N días, y los lista
+function pagosProximos(accId, dias = 30) {
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const fin = new Date(hoy); fin.setDate(fin.getDate() + dias);
+  const items = [];
+  state.movements.forEach((m) => {
+    if (m.account !== accId || !m.amount || m.amount >= 0 || !m.date) return;
+    // Expandir recurrencia dentro de la ventana
+    const base = new Date(m.date + "T00:00:00");
+    const push = (d) => {
+      if (d >= hoy && d <= fin) items.push({ label: m.label, monto: Math.abs(m.amount), date: d.toISOString().slice(0,10) });
+    };
+    if (m.recurrence === "none" || !m.recurrence) push(base);
+    else {
+      let d = new Date(base), g = 0;
+      while (d <= fin && g < 400) {
+        push(d);
+        if (m.recurrence==="weekly") d.setDate(d.getDate()+7);
+        else if (m.recurrence==="quincenal") d.setDate(d.getDate()+14);
+        else if (m.recurrence==="monthly") d.setMonth(d.getMonth()+1);
+        else if (m.recurrence==="quarterly") d.setMonth(d.getMonth()+3);
+        else break;
+        g++;
+      }
+    }
+  });
+  return items.sort((a,b) => new Date(a.date) - new Date(b.date));
+}
+
 function renderOptimizar() {
   const card = $("#optimizar-card");
   if (!card) return;
-  // Cuentas bancarias ARS con saldo positivo hoy (excluye efectivo)
+  const DIAS = 30;
+  // Cuentas bancarias ARS (excluye efectivo). Colocable = saldo − pagos 30 días.
   const cuentas = state.accounts
-    .filter(a => a.moneda === "ARS" && a.tipo !== "efectivo")
-    .map(a => ({ acc: a, ocioso: saldoCuentaAFecha(a) }))
-    .filter(x => x.ocioso > 0);
+    .filter(a => a.moneda === "ARS" && a.tipo !== "efectivo" && a.tipo !== "comitente")
+    .map(a => {
+      const saldo = saldoCuentaAFecha(a);
+      const pagos = pagosProximos(a.id, DIAS);
+      const totalPagos = pagos.reduce((s,p) => s + p.monto, 0);
+      return { acc: a, saldo, pagos, totalPagos, colocable: Math.max(0, saldo - totalPagos) };
+    })
+    .filter(x => x.saldo > 0);
 
-  const totalOcioso = cuentas.reduce((s,x) => s + x.ocioso, 0);
+  const totalColocable = cuentas.reduce((s,x) => s + x.colocable, 0);
 
   if (!cuentas.length) {
     card.innerHTML = `<div class="ctrl-head"><h2>Optimizar liquidez</h2></div>
@@ -556,39 +592,48 @@ function renderOptimizar() {
 
   card.innerHTML = `
     <div class="ctrl-head"><h2>Optimizar liquidez</h2></div>
-    <p class="opt-intro">Tenés <b>${moneyC(totalOcioso,"ARS")}</b> en cuentas sin colocar. Un FCI money market rinde y se rescata al otro día.</p>
+    <p class="opt-intro">Descontando lo que pagás en los próximos ${DIAS} días, te sobran <b>${moneyC(totalColocable,"ARS")}</b> para colocar en un FCI (se rescata al otro día).</p>
     <div class="opt-list">
       ${cuentas.map(x => `
-        <div class="opt-row">
-          <div class="opt-row-info">
-            <b>${h(x.acc.name)}</b>
-            <small>${h(bancoShort(x.acc.banco))}</small>
+        <div class="opt-card2">
+          <div class="opt-card2-head">
+            <div class="opt-row-info">
+              <b>${h(x.acc.name)}</b>
+              <small>${h(bancoShort(x.acc.banco))}</small>
+            </div>
+            <button class="opt-colocar-btn" data-acc="${x.acc.id}" ${x.colocable<=0?"disabled":""}>Colocar en FCI</button>
           </div>
-          <div class="opt-row-right">
-            <span class="opt-monto">${moneyC(x.ocioso,"ARS")}</span>
-            <button class="opt-colocar-btn" data-acc="${x.acc.id}">Colocar en FCI</button>
+          <div class="opt-calc">
+            <div class="opt-calc-row"><span>Saldo hoy</span><b>${moneyC(x.saldo,"ARS")}</b></div>
+            <div class="opt-calc-row out"><span>− Pagos ${DIAS} días${x.pagos.length?` (${x.pagos.length})`:""}</span><b>${x.totalPagos?"−"+moneyC(x.totalPagos,"ARS"):"$ 0"}</b></div>
+            <div class="opt-calc-row total"><span>= Colocable</span><b>${moneyC(x.colocable,"ARS")}</b></div>
           </div>
+          ${x.pagos.length ? `<details class="opt-pagos"><summary>Ver ${x.pagos.length} pago${x.pagos.length>1?"s":""} que ${x.pagos.length>1?"vienen":"viene"}</summary>
+            ${x.pagos.slice(0,8).map(p => `<div class="opt-pago-item"><span>${fmtDateShort(p.date)} · ${h(p.label)}</span><b>${moneyC(p.monto,"ARS")}</b></div>`).join("")}
+            ${x.pagos.length>8?`<div class="opt-pago-more">+${x.pagos.length-8} más</div>`:""}
+          </details>` : ""}
         </div>`).join("")}
     </div>`;
 
-  $$(".opt-colocar-btn").forEach(b => b.onclick = () => colocarEnFCI(b.dataset.acc));
+  $$(".opt-colocar-btn").forEach(b => { if (!b.disabled) b.onclick = () => colocarEnFCI(b.dataset.acc); });
 }
 
-// Abre el modal de inversión pre-cargado para colocar el ocioso de una cuenta
+// Abre el modal de inversión pre-cargado para colocar el colocable de una cuenta
 function colocarEnFCI(accId) {
   const acc = state.accounts.find(a => a.id === accId);
   if (!acc) return;
-  const ocioso = saldoCuentaAFecha(acc);
+  const saldo = saldoCuentaAFecha(acc);
+  const totalPagos = pagosProximos(acc.id, 30).reduce((s,p) => s + p.monto, 0);
+  const colocable = Math.max(0, saldo - totalPagos);
   openInvModal();
-  // Pre-cargar: tipo FCI, cuenta, monto ocioso, sociedad sugerida del banco
   $("#i-tipo").value = "fci";
   updateInvTipo();
   $("#i-account").value = accId;
   updateInvTipo();
-  $("#i-monto").value = Math.max(0, Math.round(ocioso));
+  $("#i-monto").value = Math.max(0, Math.round(colocable));
   $("#i-label").value = "FCI money market";
   $("#i-sociedad").value = sugerirSociedadFCI(acc.banco);
-  $("#i-rend").value = 40; // TNA de referencia money market
+  $("#i-rend").value = 40;
   updateInvPreview();
 }
 
@@ -3145,7 +3190,15 @@ async function renderInversiones() {
               </tr>`;
             }).join("")}</tbody>
           </table>
+        </div>
+        <div class="inv-confirm-bar">
+          <div><b>¿Querés hacer esta inversión?</b><span>Se registra en tu cartera y se descuenta de la cuenta.</span></div>
+          <button class="btn-primary" id="inv-confirm-btn"
+            data-tipo="fci" data-label="${h(best.name || 'FCI money market')}"
+            data-sociedad="${h(best.manager || '')}" data-monto="${Math.round(amount)}"
+            data-rend="${num(best.tna)}" data-plazo="0">Registrar esta inversión</button>
         </div>`;
+      wireConfirmInversion();
     } catch {
       $("#inv-result").innerHTML = `<div class="inv-placeholder">⚠️ Error al calcular.</div>`;
     }
@@ -3203,7 +3256,14 @@ async function renderInversiones() {
             <span>Riesgo <b>${data.risk || "bajo"}</b></span>
           </div>
         </div>
-        ${listHtml}`;
+        ${listHtml}
+        <div class="inv-confirm-bar">
+          <div><b>¿Querés hacer esta inversión?</b><span>Se registra en tu cartera y se descuenta de la cuenta.</span></div>
+          <button class="btn-primary" id="inv-confirm-btn"
+            data-tipo="${isCaucion ? 'caucion' : 'plazo_fijo'}" data-label="${isCaucion ? 'Caución bursátil' : 'Plazo fijo'}"
+            data-monto="${Math.round(amount)}" data-rend="${num(bestTna)}" data-dias="${days}">Registrar esta inversión</button>
+        </div>`;
+      wireConfirmInversion();
     } catch {
       $("#inv-result").innerHTML = `<div class="inv-placeholder">⚠️ Error al calcular.</div>`;
     }
@@ -3240,7 +3300,14 @@ async function renderInversiones() {
             <span>Vencimiento en <b>${r.days} días</b></span>
             <span>${r.maturity_note}</span>
           </div>
+        </div>
+        <div class="inv-confirm-bar">
+          <div><b>¿Querés comprar esta letra?</b><span>Necesitás una cuenta comitente. Se registra en tu cartera.</span></div>
+          <button class="btn-primary" id="inv-confirm-btn"
+            data-tipo="bono" data-label="${h(r.symbol)} · LECAP" data-monto="${Math.round(r.invested)}"
+            data-rend="${r.tna_pct != null ? num(r.tna_pct) : 0}" data-dias="${r.days}" data-comitente="1">Comprar por la comitente</button>
         </div>`;
+      wireConfirmInversion();
     } catch {
       $("#inv-result").innerHTML = `<div class="inv-placeholder">⚠️ Error al calcular.</div>`;
     }
@@ -3302,7 +3369,14 @@ async function renderInversiones() {
               <td><b>${money(p.amount)}</b></td>
             </tr>`).join("")}</tbody>
           </table>
+        </div>
+        <div class="inv-confirm-bar">
+          <div><b>¿Querés comprar este bono?</b><span>Necesitás una cuenta comitente. Se registra en tu cartera.</span></div>
+          <button class="btn-primary" id="inv-confirm-btn"
+            data-tipo="bono" data-label="${h(r.symbol || 'Bono')}" data-monto="${Math.round(r.invested)}"
+            data-rend="${r.return_pct != null ? num(r.return_pct) : 0}" data-dias="${r.days_to_maturity || ''}" data-comitente="1">Comprar por la comitente</button>
         </div>`;
+      wireConfirmInversion();
     } catch {
       $("#inv-result").innerHTML = `<div class="inv-placeholder">⚠️ Error al calcular.</div>`;
     }
@@ -3348,6 +3422,48 @@ function _wireMktTabs() {
   document.querySelectorAll("[data-mtab]").forEach((b) => {
     b.onclick = () => { state.mktTab = b.dataset.mtab; renderMercado(); };
   });
+}
+
+// Conecta el botón "Registrar/Comprar inversión" del simulador con el registro real
+function wireConfirmInversion() {
+  const btn = $("#inv-confirm-btn");
+  if (!btn) return;
+  btn.onclick = () => {
+    const d = btn.dataset;
+    const necesitaComitente = d.comitente === "1";
+    // Para bonos/letras: verificar que exista una cuenta comitente
+    if (necesitaComitente) {
+      const comitentes = state.accounts.filter(a => a.tipo === "comitente");
+      if (!comitentes.length) {
+        if (confirm("Para comprar bonos o letras necesitás una cuenta comitente (en tu broker/ALyC). ¿La creamos ahora en Configuración?")) {
+          switchView("config");
+          state.cfgSection = "cuentas";
+          setTimeout(() => renderConfig(), 50);
+        }
+        return;
+      }
+    }
+    // Abrir el modal de inversión pre-cargado con los datos simulados
+    openInvModal();
+    $("#i-tipo").value = d.tipo;
+    updateInvTipo();
+    // Elegir cuenta: comitente para bonos, primera cuenta de la moneda para el resto
+    if (necesitaComitente) {
+      const com = state.accounts.find(a => a.tipo === "comitente");
+      if (com) $("#i-account").value = com.id;
+    }
+    updateInvTipo();
+    $("#i-label").value = d.label || "";
+    $("#i-monto").value = d.monto || "";
+    $("#i-rend").value = d.rend || "";
+    if (d.sociedad) $("#i-sociedad").value = d.sociedad;
+    // Fecha de vencimiento si vino con días
+    if (d.dias && d.dias !== "0") {
+      const venc = new Date(); venc.setDate(venc.getDate() + parseInt(d.dias));
+      if ($("#i-venc")) $("#i-venc").value = venc.toISOString().slice(0,10);
+    }
+    updateInvPreview();
+  };
 }
 
 function renderMercado() {
@@ -4186,31 +4302,38 @@ function renderConfig() {
 
   const renderCfgAccounts = () => {
     if (!$("#cfg-accounts")) return;
-    $("#cfg-accounts").innerHTML = state.accounts.map((a) => `
+    $("#cfg-accounts").innerHTML = state.accounts.map((a) => {
+      const isEf = a.tipo === "efectivo";
+      const isCom = a.tipo === "comitente";
+      return `
       <div class="cfg-account" data-id="${a.id}">
         <div class="cfg-acc-grid">
           <label class="field"><span>Nombre</span>
-            <input type="text" class="ca-name" value="${h(a.name)}" placeholder="Ej: Cuenta operativa"></label>
+            <input type="text" class="ca-name" value="${h(a.name)}" placeholder="${isCom?'Ej: Comitente Balanz':'Ej: Cuenta operativa'}"></label>
           <label class="field"><span>Tipo</span>
             <select class="ca-tipo">
               <option value="ca" ${a.tipo==="ca"?"selected":""}>Caja de ahorro</option>
               <option value="cc" ${a.tipo==="cc"?"selected":""}>Cuenta corriente</option>
               <option value="efectivo" ${a.tipo==="efectivo"?"selected":""}>Efectivo / Caja</option>
+              <option value="comitente" ${a.tipo==="comitente"?"selected":""}>Cuenta comitente (inversión)</option>
             </select></label>
-          <label class="field ca-banco-field" ${a.tipo==="efectivo"?'style="display:none"':''}><span>Banco</span>
-            <select class="ca-banco">${bancoOptions(a.banco)}</select></label>
+          <label class="field ca-broker-field" ${isCom?'':'style="display:none"'}><span>Broker / ALyC</span>
+            <input type="text" class="ca-broker" value="${h(a.broker||"")}" placeholder="Ej: Balanz, IOL, PPI, Bull Market"></label>
+          <label class="field ca-banco-field" ${isEf?'style="display:none"':''}><span>${isCom?'Banco asociado (opcional)':'Banco'}</span>
+            <select class="ca-banco"><option value="">${isCom?'— Sin banco asociado —':'Elegir banco'}</option>${bancoOptions(a.banco)}</select></label>
           <label class="field"><span>Moneda</span>
             <select class="ca-moneda">
               <option value="ARS" ${a.moneda==="ARS"?"selected":""}>Pesos (ARS)</option>
               <option value="USD" ${a.moneda==="USD"?"selected":""}>Dólares (USD)</option>
             </select></label>
-          <label class="field ca-alias-field" ${a.tipo==="efectivo"?'style="display:none"':''}><span>N° cuenta / alias (opcional)</span>
-            <input type="text" class="ca-alias" value="${h(a.alias||"")}" placeholder="mi.alias.mp"></label>
+          <label class="field ca-alias-field" ${isEf?'style="display:none"':''}><span>${isCom?'N° de comitente (opcional)':'N° cuenta / alias (opcional)'}</span>
+            <input type="text" class="ca-alias" value="${h(a.alias||"")}" placeholder="${isCom?'123456':'mi.alias.mp'}"></label>
           <label class="field"><span>Saldo inicial</span>
             <div class="money-input"><em>$</em><input type="number" class="ca-opening" value="${a.opening}" step="1000"></div></label>
         </div>
         <button class="cfg-acc-del" title="Eliminar">Eliminar cuenta</button>
-      </div>`).join("");
+      </div>`;
+    }).join("");
 
     $$(".cfg-account").forEach((row) => {
       const id = row.dataset.id;
@@ -4220,11 +4343,18 @@ function renderConfig() {
       row.querySelector(".ca-moneda").onchange = (e) => { acc.moneda = e.target.value; renderAccounts(); syncAccountSelectors(); project(); };
       row.querySelector(".ca-alias").oninput = (e) => { acc.alias = e.target.value; saveState(); };
       row.querySelector(".ca-opening").oninput = (e) => { acc.opening = parseFloat(e.target.value) || 0; project(); };
+      const brokerInput = row.querySelector(".ca-broker");
+      if (brokerInput) brokerInput.oninput = (e) => { acc.broker = e.target.value; saveState(); };
       row.querySelector(".ca-tipo").onchange = (e) => {
         acc.tipo = e.target.value;
         const isEf = acc.tipo === "efectivo";
+        const isCom = acc.tipo === "comitente";
         row.querySelector(".ca-banco-field").style.display = isEf ? "none" : "";
         row.querySelector(".ca-alias-field").style.display = isEf ? "none" : "";
+        row.querySelector(".ca-broker-field").style.display = isCom ? "" : "none";
+        saveState();
+        renderCfgAccounts(); // re-render para actualizar labels/placeholders
+        renderAccounts(); syncAccountSelectors();
       };
       row.querySelector(".cfg-acc-del").onclick = () => {
         if (state.accounts.length <= 1) { alert("Tenés que tener al menos una cuenta."); return; }
