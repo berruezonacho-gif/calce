@@ -525,7 +525,6 @@ function renderAccounts() {
       <div class="acc-bal-today">${moneyC(balToday(a), a.moneda)}</div>
     </div>`).join("");
   renderAccountsTotal();
-  renderOptimizar();
 }
 
 function bancoShort(banco) {
@@ -765,7 +764,6 @@ async function project() {
   saveState();
   renderMovSummary();
   renderAccountsTotal();
-  renderOptimizar();
   renderCurrencyTabs();
 
   const filterAcct = state.cfAccount; // "" = consolidado de la moneda activa
@@ -911,6 +909,11 @@ function renderKPIs() {
 function fmtDate(iso) {
   const d = new Date(iso + "T00:00:00");
   return d.toLocaleDateString("es-AR", { day: "numeric", month: "short" });
+}
+// Fecha con año, para cronogramas de bonos/letras (vencen en años futuros)
+function fmtDateAnio(iso) {
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("es-AR", { day: "numeric", month: "short", year: "numeric" });
 }
 
 // ── Chart (SVG) ──────────────────────────────────────────
@@ -1590,34 +1593,26 @@ function renderInsights() {
 
 // ── Excedente (placeholder con datos del cash flow) ──────
 function renderExcedente() {
-  // Excedente invertible = líquido de hoy en cuentas bancarias (no efectivo).
-  // Un FCI money market se rescata al otro día, así que la plata en banco
-  // puede colocarse sin bloquearla: no depende de proyecciones a 90 días.
-  const cuentasBanco = state.accounts.filter(a => a.moneda === "ARS" && a.tipo !== "efectivo");
-  const excedente = cuentasBanco.reduce((s,a) => s + saldoCuentaAFecha(a), 0);
+  // El excedente es la liquidez que te sobra después de cubrir los pagos
+  // próximos. El optimizador (renderOptimizar) hace ese cálculo por cuenta.
   const yaColocado = totalColocado("ARS");
 
   $("#excedente-wrap").innerHTML = `
-    <div class="exc-hero">
-      <div class="eyebrow">Excedente para invertir</div>
-      <div class="big">${money(excedente)}</div>
-      <p class="sub">Es tu plata líquida en cuentas bancarias hoy. La podés colocar en un FCI money market y rescatarla al otro día.</p>
+    <div class="inv-head">
+      <div>
+        <div class="eyebrow">Excedente para invertir</div>
+        <h2 class="inv-title">Optimizar liquidez</h2>
+        <p class="inv-sub">Descontando lo que pagás en los próximos días, esto es lo que te sobra en cada cuenta para colocar en un FCI (se rescata al otro día). Vos decidís cuánto.</p>
+      </div>
     </div>
 
-    <div class="exc-cuentas">
-      ${cuentasBanco.map(a => `<div class="exc-cuenta">
-        <span>${h(a.name)}</span>
-        <b>${moneyC(saldoCuentaAFecha(a), "ARS")}</b>
-      </div>`).join("")}
-    </div>
+    <div class="ctrl-card" id="optimizar-card" style="max-width:640px"></div>
 
-    ${yaColocado > 0 ? `<p class="exc-note">Ya tenés ${money(yaColocado)} colocados en inversiones activas.</p>` : ""}
+    ${yaColocado > 0 ? `<p class="exc-note" style="margin-top:16px">Ya tenés ${money(yaColocado)} colocados en inversiones activas. <a href="#" id="exc-ver-cartera">Ver mi cartera →</a></p>` : ""}`;
 
-    <div style="text-align:center;margin-top:20px">
-      <button class="btn-primary" id="exc-invest-btn" style="width:auto;padding:12px 28px">Invertir en un FCI →</button>
-    </div>`;
-  const btn = $("#exc-invest-btn");
-  if (btn) btn.addEventListener("click", () => openInvModal());
+  renderOptimizar();
+  const link = $("#exc-ver-cartera");
+  if (link) link.addEventListener("click", (e) => { e.preventDefault(); switchView("cartera"); });
 }
 
 // ── Dólar: comprar / vender divisas ──────────────────────
@@ -2725,10 +2720,6 @@ function renderCartera() {
       ${hasUSDinv ? tablero("USD", liqUSD, colUSD) : ""}
     </div>
 
-    <div class="callout-info">
-      <b>Una inversión no es un gasto.</b> Cuando colocás plata, sale de tu cuenta pero se suma a "colocado". En el flujo de caja la vas a ver salir hoy y volver (con su rendimiento) en la fecha de vencimiento — no como una pérdida.
-    </div>
-
     <div class="table-card" style="margin-top:20px">
       <div class="chart-head"><h2>Colocaciones activas</h2></div>
       ${activas.length ? `<div class="cf-table-scroll"><table class="cf-table inv-table">
@@ -2809,13 +2800,26 @@ function openInvModal() {
 }
 function closeInvModal() { $("#inv-modal").classList.add("hidden"); }
 
-function syncInvAccountSelect() {
-  $("#i-account").innerHTML = state.accounts.map(a =>
-    `<option value="${a.id}">${h(a.name)}${a.moneda === "USD" ? " (USD)" : ""}</option>`).join("");
+function syncInvAccountSelect(tipoInv) {
+  // Bonos, letras y cauciones salen de la cuenta comitente.
+  // Plazo fijo, FCI y dólares salen de una cuenta bancaria (no comitente).
+  const esBursatil = tipoInv === "bono" || tipoInv === "caucion";
+  const cuentas = state.accounts.filter(a =>
+    esBursatil ? a.tipo === "comitente" : a.tipo !== "comitente");
+  const lista = cuentas.length ? cuentas : state.accounts;
+  $("#i-account").innerHTML = lista.map(a =>
+    `<option value="${a.id}">${h(a.name)}${a.moneda === "USD" ? " (USD)" : ""}${a.tipo==="comitente"&&a.broker?" · "+h(a.broker):""}</option>`).join("");
 }
 
 function updateInvTipo() {
-  const tipo = TIPOS_INVERSION.find(t => t.v === $("#i-tipo").value);
+  const tipoV = $("#i-tipo").value;
+  // Re-filtrar las cuentas de origen según el tipo (bursátil → comitente)
+  const prevAcc = $("#i-account").value;
+  syncInvAccountSelect(tipoV);
+  if (state.accounts.find(a => a.id === prevAcc && [...$("#i-account").options].some(o=>o.value===prevAcc))) {
+    $("#i-account").value = prevAcc;
+  }
+  const tipo = TIPOS_INVERSION.find(t => t.v === tipoV);
   const acc = state.accounts.find(a => a.id === $("#i-account").value);
   $("#i-cur").textContent = acc && acc.moneda === "USD" ? "US$" : "$";
   // Mostrar/ocultar vencimiento según el tipo
@@ -3354,7 +3358,7 @@ async function renderInversiones() {
           <div class="inv-break">
             <span>Renta: <b>${money(r.total_interest)}</b></span>
             <span>Capital: <b>${money(r.total_principal)}</b></span>
-            <span>${r.payments_count} pagos · próximo ${r.next_payment ? fmtDate(r.next_payment.date) : "—"}</span>
+            <span>${r.payments_count} pagos · próximo ${r.next_payment ? fmtDateAnio(r.next_payment.date) : "—"}</span>
           </div>
         </div>
         <div class="inv-schedule">
@@ -3362,7 +3366,7 @@ async function renderInversiones() {
           <table class="inv-table">
             <thead><tr><th>Fecha</th><th>Tipo</th><th>Renta</th><th>Capital</th><th>Total</th></tr></thead>
             <tbody>${r.schedule.map((p) => `<tr>
-              <td>${fmtDate(p.date)}</td>
+              <td>${fmtDateAnio(p.date)}</td>
               <td><span class="tag-${p.kind.includes("mort") ? "amort" : "coupon"}">${p.kind}</span></td>
               <td>${money(p.interest)}</td>
               <td>${money(p.principal)}</td>
@@ -3430,12 +3434,12 @@ function wireConfirmInversion() {
   if (!btn) return;
   btn.onclick = () => {
     const d = btn.dataset;
-    const necesitaComitente = d.comitente === "1";
-    // Para bonos/letras: verificar que exista una cuenta comitente
-    if (necesitaComitente) {
+    // Instrumentos bursátiles (van por la cuenta comitente): bonos, letras y cauciones
+    const esBursatil = d.comitente === "1" || d.tipo === "caucion";
+    if (esBursatil) {
       const comitentes = state.accounts.filter(a => a.tipo === "comitente");
       if (!comitentes.length) {
-        if (confirm("Para comprar bonos o letras necesitás una cuenta comitente (en tu broker/ALyC). ¿La creamos ahora en Configuración?")) {
+        if (confirm("Esta operación es bursátil y necesita una cuenta comitente (en tu broker/ALyC). ¿La creamos ahora en Configuración?")) {
           switchView("config");
           state.cfgSection = "cuentas";
           setTimeout(() => renderConfig(), 50);
@@ -3447,8 +3451,10 @@ function wireConfirmInversion() {
     openInvModal();
     $("#i-tipo").value = d.tipo;
     updateInvTipo();
-    // Elegir cuenta: comitente para bonos, primera cuenta de la moneda para el resto
-    if (necesitaComitente) {
+    // Elegir cuenta de origen:
+    // - Bursátil (bono/letra/caución) → la cuenta comitente
+    // - Plazo fijo / FCI → dejar que el usuario elija (no forzamos la operativa)
+    if (esBursatil) {
       const com = state.accounts.find(a => a.tipo === "comitente");
       if (com) $("#i-account").value = com.id;
     }
