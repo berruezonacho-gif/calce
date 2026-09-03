@@ -566,18 +566,55 @@ function pagosProximos(accId, dias = 30) {
   return items.sort((a,b) => new Date(a.date) - new Date(b.date));
 }
 
+// Pagos de HOY de una cuenta (lo único que no podés colocar en money market,
+// porque el money market lo rescatás recién mañana T+1).
+function pagosDeHoy(accId) {
+  const hoy = new Date().toISOString().slice(0,10);
+  return pagosProximos(accId, 1).filter(p => p.date === hoy).reduce((s,p) => s + p.monto, 0);
+}
+
+// Días hasta el próximo pago "grande" (que consume >40% del saldo colocable).
+// Es cuánto tiempo tenés esa plata libre → define si conviene un plazo más largo.
+function diasLibres(accId, colocable) {
+  const pagos = pagosProximos(accId, 120);
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  let acum = 0;
+  for (const p of pagos) {
+    acum += p.monto;
+    // Cuando los pagos acumulados superan ~40% de lo colocable, ese es el
+    // horizonte en que vas a necesitar la plata de vuelta.
+    if (acum > colocable * 0.4) {
+      const d = Math.round((new Date(p.date+"T00:00:00") - hoy) / 86400000);
+      return Math.max(1, d);
+    }
+  }
+  return 120; // no hay pagos grandes en el horizonte
+}
+
+// Sugiere el instrumento según cuántos días tenés la plata libre.
+function sugerirInstrumento(dias) {
+  if (dias <= 2) return { inst: "Money market", nota: "Rescate al otro día (T+1). Ideal para plata que podés necesitar ya.", tipo: "fci" };
+  if (dias <= 7) return { inst: "Money market o caución corta", nota: `Tenés ~${dias} días libres. La caución a pocos días puede rendir algo más si la tasa conviene.`, tipo: "fci" };
+  if (dias <= 35) return { inst: "Plazo fijo, caución o money market", nota: `Tenés ~${dias} días libres. Un plazo fijo (30d) o caución suele rendir más que el money market si no vas a tocar la plata.`, tipo: "plazo_fijo" };
+  return { inst: "Plazo fijo / bono corto", nota: `Tenés ~${dias} días libres. Con ese horizonte conviene un plazo fijo o un instrumento a plazo que rinda más.`, tipo: "plazo_fijo" };
+}
+
 function renderOptimizar() {
   const card = $("#optimizar-card");
   if (!card) return;
-  const DIAS = 30;
-  // Cuentas bancarias ARS (excluye efectivo). Colocable = saldo − pagos 30 días.
+  // Cuentas bancarias ARS (excluye efectivo y comitente).
+  // COLOCABLE = saldo − pagos de HOY. El money market se rescata mañana,
+  // así que casi todo el excedente puede colocarse aunque pagues en unos días.
   const cuentas = state.accounts
     .filter(a => a.moneda === "ARS" && a.tipo !== "efectivo" && a.tipo !== "comitente")
     .map(a => {
       const saldo = saldoCuentaAFecha(a);
-      const pagos = pagosProximos(a.id, DIAS);
-      const totalPagos = pagos.reduce((s,p) => s + p.monto, 0);
-      return { acc: a, saldo, pagos, totalPagos, colocable: Math.max(0, saldo - totalPagos) };
+      const pagoHoy = pagosDeHoy(a.id);
+      const colocable = Math.max(0, saldo - pagoHoy);
+      const dias = diasLibres(a.id, colocable);
+      const sug = sugerirInstrumento(dias);
+      const pagos = pagosProximos(a.id, 30);
+      return { acc: a, saldo, pagoHoy, colocable, dias, sug, pagos };
     })
     .filter(x => x.saldo > 0);
 
@@ -591,7 +628,7 @@ function renderOptimizar() {
 
   card.innerHTML = `
     <div class="ctrl-head"><h2>Optimizar liquidez</h2></div>
-    <p class="opt-intro">Descontando lo que pagás en los próximos ${DIAS} días, te sobran <b>${moneyC(totalColocable,"ARS")}</b> para colocar en un FCI (se rescata al otro día).</p>
+    <p class="opt-intro">Podés colocar hoy <b>${moneyC(totalColocable,"ARS")}</b> y generar renta. Un money market se rescata al otro día; si tenés la plata libre más tiempo, te conviene un plazo que rinda más.</p>
     <div class="opt-list">
       ${cuentas.map(x => `
         <div class="opt-card2">
@@ -600,39 +637,48 @@ function renderOptimizar() {
               <b>${h(x.acc.name)}</b>
               <small>${h(bancoShort(x.acc.banco))}</small>
             </div>
-            <button class="opt-colocar-btn" data-acc="${x.acc.id}" ${x.colocable<=0?"disabled":""}>Colocar en FCI</button>
+            <button class="opt-colocar-btn" data-acc="${x.acc.id}" data-tipo="${x.sug.tipo}" ${x.colocable<=0?"disabled":""}>Colocar</button>
           </div>
           <div class="opt-calc">
             <div class="opt-calc-row"><span>Saldo hoy</span><b>${moneyC(x.saldo,"ARS")}</b></div>
-            <div class="opt-calc-row out"><span>− Pagos ${DIAS} días${x.pagos.length?` (${x.pagos.length})`:""}</span><b>${x.totalPagos?"−"+moneyC(x.totalPagos,"ARS"):"$ 0"}</b></div>
-            <div class="opt-calc-row total"><span>= Colocable</span><b>${moneyC(x.colocable,"ARS")}</b></div>
+            ${x.pagoHoy ? `<div class="opt-calc-row out"><span>− Pagos de hoy</span><b>−${moneyC(x.pagoHoy,"ARS")}</b></div>` : ""}
+            <div class="opt-calc-row total"><span>= Colocable hoy</span><b>${moneyC(x.colocable,"ARS")}</b></div>
           </div>
-          ${x.pagos.length ? `<details class="opt-pagos"><summary>Ver ${x.pagos.length} pago${x.pagos.length>1?"s":""} que ${x.pagos.length>1?"vienen":"viene"}</summary>
+          <div class="opt-sugerencia">
+            <div class="opt-sug-head"><span class="opt-sug-inst">${x.sug.inst}</span><span class="opt-sug-dias">${x.dias>=120?"sin pagos grandes a la vista":`~${x.dias} días libres`}</span></div>
+            <p>${x.sug.nota}</p>
+          </div>
+          ${x.pagos.length ? `<details class="opt-pagos"><summary>Ver ${x.pagos.length} pago${x.pagos.length>1?"s":""} de los próximos 30 días</summary>
             ${x.pagos.slice(0,8).map(p => `<div class="opt-pago-item"><span>${fmtDateShort(p.date)} · ${h(p.label)}</span><b>${moneyC(p.monto,"ARS")}</b></div>`).join("")}
             ${x.pagos.length>8?`<div class="opt-pago-more">+${x.pagos.length-8} más</div>`:""}
           </details>` : ""}
         </div>`).join("")}
     </div>`;
 
-  $$(".opt-colocar-btn").forEach(b => { if (!b.disabled) b.onclick = () => colocarEnFCI(b.dataset.acc); });
+  $$(".opt-colocar-btn").forEach(b => { if (!b.disabled) b.onclick = () => colocarEnFCI(b.dataset.acc, b.dataset.tipo); });
 }
 
-// Abre el modal de inversión pre-cargado para colocar el colocable de una cuenta
-function colocarEnFCI(accId) {
+// Abre el modal de inversión pre-cargado. tipoSug: instrumento sugerido según el plazo.
+function colocarEnFCI(accId, tipoSug) {
   const acc = state.accounts.find(a => a.id === accId);
   if (!acc) return;
   const saldo = saldoCuentaAFecha(acc);
-  const totalPagos = pagosProximos(acc.id, 30).reduce((s,p) => s + p.monto, 0);
-  const colocable = Math.max(0, saldo - totalPagos);
+  const colocable = Math.max(0, saldo - pagosDeHoy(acc.id));
+  const tipo = tipoSug === "plazo_fijo" ? "plazo_fijo" : "fci";
   openInvModal();
-  $("#i-tipo").value = "fci";
+  $("#i-tipo").value = tipo;
   updateInvTipo();
   $("#i-account").value = accId;
   updateInvTipo();
   $("#i-monto").value = Math.max(0, Math.round(colocable));
-  $("#i-label").value = "FCI money market";
-  $("#i-sociedad").value = sugerirSociedadFCI(acc.banco);
-  $("#i-rend").value = 40;
+  if (tipo === "fci") {
+    $("#i-label").value = "FCI money market";
+    $("#i-sociedad").value = sugerirSociedadFCI(acc.banco);
+    $("#i-rend").value = 40;
+  } else {
+    $("#i-label").value = "Plazo fijo";
+    $("#i-rend").value = 42;
+  }
   updateInvPreview();
 }
 
