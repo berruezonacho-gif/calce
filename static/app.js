@@ -20,6 +20,7 @@ const state = {
   investments: [], // colocaciones (plazo fijo, FCI, USD, bonos, caución)
   comprobantes: [], // facturas a cobrar (AR) y a pagar (AP)
   proveedores: [], // directorio de proveedores
+  retenciones: [], // retenciones y percepciones sufridas (crédito fiscal)
   accounts: [
     { id: "efectivo", name: "Caja / Efectivo", banco: "", tipo: "efectivo", moneda: "ARS", alias: "", opening: 300000 },
     { id: "banco", name: "Cuenta principal", banco: "Banco de la Nación Argentina", tipo: "cc", moneda: "ARS", alias: "", opening: 500000 },
@@ -97,6 +98,42 @@ function catLabel(v) {
 function catFlujo(v) {
   const c = CATEGORIAS.find((x) => x.v === v);
   return c ? c.flujo : null;
+}
+
+// ── Plan de cuentas (contabilidad) ───────────────────────
+// Cada categoría del flujo se mapea a un rubro del Estado de Resultados.
+// Los ingresos son "ventas" (o similar); los egresos se separan en costos
+// operativos, gastos, impuestos y financieros.
+const RUBRO_RESULTADO = {
+  // Ingresos
+  ventas: { rubro: "Ventas", grupo: "ingresos" },
+  certificaciones: { rubro: "Ventas", grupo: "ingresos" },
+  anticipos: { rubro: "Ventas", grupo: "ingresos" },
+  otros_ingresos: { rubro: "Otros ingresos", grupo: "ingresos" },
+  // Costos directos
+  materiales: { rubro: "Costo de mercadería / materiales", grupo: "costos" },
+  subcontratos: { rubro: "Subcontratos", grupo: "costos" },
+  // Gastos operativos
+  sueldos: { rubro: "Sueldos y jornales", grupo: "gastos" },
+  cargas: { rubro: "Cargas sociales", grupo: "gastos" },
+  proveedores: { rubro: "Compras y servicios de terceros", grupo: "gastos" },
+  alquileres: { rubro: "Alquileres", grupo: "gastos" },
+  servicios: { rubro: "Servicios", grupo: "gastos" },
+  otros_egresos: { rubro: "Otros gastos", grupo: "gastos" },
+  // Impuestos
+  impuestos: { rubro: "Impuestos", grupo: "impuestos" },
+  // Financieros
+  financiacion: { rubro: "Gastos financieros", grupo: "financieros" },
+};
+const GRUPOS_RESULTADO = [
+  { g: "ingresos", label: "Ingresos", signo: 1 },
+  { g: "costos", label: "Costos directos", signo: -1 },
+  { g: "gastos", label: "Gastos operativos", signo: -1 },
+  { g: "impuestos", label: "Impuestos", signo: -1 },
+  { g: "financieros", label: "Resultados financieros", signo: -1 },
+];
+function rubroDe(cat) {
+  return RUBRO_RESULTADO[cat] || { rubro: "Otros", grupo: "gastos" };
 }
 
 // Clasificador automático por palabras clave en el concepto
@@ -180,6 +217,7 @@ function saveState() {
         comprobantes: state.comprobantes,
         proveedores: state.proveedores,
         impMontos: state.impMontos,
+        retenciones: state.retenciones,
         accounts: state.accounts,
         empresa: state.empresa,
         prefs: state.prefs,
@@ -201,6 +239,7 @@ function loadState() {
     if (s.comprobantes) state.comprobantes = s.comprobantes;
     if (s.proveedores) state.proveedores = s.proveedores;
     if (s.impMontos) state.impMontos = s.impMontos;
+    if (s.retenciones) state.retenciones = s.retenciones;
     if (s.accounts) state.accounts = s.accounts;
     if (s.empresa) state.empresa = s.empresa;
     if (s.prefs) state.prefs = s.prefs;
@@ -239,6 +278,28 @@ function openMovModal(editIndex = null) {
   $("#m-medio").value = m ? (m.medio || "transferencia") : "transferencia";
   syncAccountSelectors();
   $("#m-account").value = m && m.account ? m.account : (state.accounts[0]?.id || "");
+
+  // Campo de acreditación de tarjeta: visible solo si el medio es tarjeta
+  const syncTarjeta = () => {
+    const esTarjeta = $("#m-medio").value === "tarjeta";
+    $("#m-tarjeta-field").style.display = esTarjeta ? "" : "none";
+  };
+  $("#m-medio").onchange = syncTarjeta;
+  syncTarjeta();
+  // Al editar un cobro con tarjeta, restaurar el plazo guardado
+  if (m && m.medio === "tarjeta" && m.tarjetaPlazo != null) {
+    $("#m-tarjeta-plazo").value = String(m.tarjetaPlazo);
+  } else {
+    $("#m-tarjeta-plazo").value = "2";
+  }
+  // Cuando cambia el plazo de tarjeta, ajustar la fecha estimada
+  $("#m-tarjeta-plazo").onchange = () => {
+    const v = $("#m-tarjeta-plazo").value;
+    if (v !== "custom") {
+      const d = new Date(); d.setDate(d.getDate() + parseInt(v));
+      $("#m-date").value = d.toISOString().slice(0,10);
+    }
+  };
 
   // Modo: si el movimiento es cheque, abrir en modo cheque
   const mode = m && m.medio === "cheque" && m.venc ? "cheque" : "simple";
@@ -380,6 +441,14 @@ function saveMovFromModal() {
     recurrence: $("#m-rec").value,
     medio, account,
   };
+  // Cobro con tarjeta: guardar el plazo y marcarlo como estimado (a confirmar)
+  if (medio === "tarjeta") {
+    const plazo = $("#m-tarjeta-plazo").value;
+    mov.tarjetaPlazo = plazo === "custom" ? null : parseInt(plazo);
+    // Al crear (no editar), o si venía estimado, queda estimado
+    const prev = isEditingMov() ? state.movements[state.editingMov] : null;
+    mov.tarjetaEstado = (prev && prev.tarjetaEstado === "acreditado") ? "acreditado" : "estimado";
+  }
   if (isEditingMov()) state.movements[state.editingMov] = mov;
   else state.movements.push(mov);
   closeMovModal(); project();
@@ -786,15 +855,78 @@ function renderMovSummary() {
     el.innerHTML = `<p class="mov-empty">Todavía no cargaste movimientos. Tocá <b>+ Agregar</b> o <b>Importar</b> un Excel.</p>`;
     return;
   }
+  // Movimientos editables (los de inversiones/comprobantes/impuestos se
+  // gestionan desde su propio módulo). Guardamos el índice real.
+  const editables = movs
+    .map((m, idx) => ({ m, idx }))
+    .filter(x => !x.m.invId && !x.m.compId && !x.m.impVto);
   const ingresos = movs.filter((m) => m.amount > 0).length;
   const egresos = movs.filter((m) => m.amount < 0).length;
+
   el.innerHTML = `
     <div class="mov-count">
       <div><b>${movs.length}</b><small>movimientos</small></div>
       <div><b class="in">${ingresos}</b><small>ingresos</small></div>
       <div><b class="out">${egresos}</b><small>egresos</small></div>
     </div>
-    <p class="mov-hint">Tocá cualquier movimiento en <b>Detalle por fecha</b> para editarlo o eliminarlo.</p>`;
+    <div class="mov-manage-list">
+      ${editables.slice(0, 40).map(x => {
+        const esTarjetaEst = x.m.medio === "tarjeta" && x.m.tarjetaEstado === "estimado";
+        return `
+        <div class="mov-manage-item ${esTarjetaEst?'mmi-estimado':''}" data-idx="${x.idx}">
+          <div class="mmi-info">
+            <span class="mmi-label">${h(x.m.label || "(sin concepto)")}${esTarjetaEst?' <span class="mmi-tag">💳 a acreditar</span>':''}</span>
+            <small>${fmtDateShort(x.m.date)}${x.m.recurrence && x.m.recurrence!=="none" ? " · repite" : ""} · ${h(accountName(x.m.account))}</small>
+          </div>
+          <span class="mmi-monto ${x.m.amount>0?'in':'out'}">${x.m.amount>0?'+':'−'}${moneyC(Math.abs(x.m.amount), movCurrency(x.m))}</span>
+          ${esTarjetaEst?`<button class="mmi-confirm" data-confirm="${x.idx}" title="Confirmar que ya se acreditó">✓</button>`:''}
+          <button class="mmi-del" data-del="${x.idx}" title="Eliminar">×</button>
+        </div>`;
+      }).join("")}
+      ${editables.length>40 ? `<p class="mov-more">+${editables.length-40} más</p>` : ""}
+    </div>
+    <p class="mov-hint">Tocá un movimiento para editarlo, o la × para eliminarlo. Los cobros con tarjeta ✓ los confirmás cuando se acreditan.</p>`;
+
+  $$(".mov-manage-item").forEach(row => {
+    row.onclick = (e) => {
+      if (e.target.classList.contains("mmi-del") || e.target.classList.contains("mmi-confirm")) return;
+      openMovModal(parseInt(row.dataset.idx, 10));
+    };
+  });
+  $$(".mmi-confirm").forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      confirmarAcreditacionTarjeta(parseInt(btn.dataset.confirm, 10));
+    };
+  });
+  $$(".mmi-del").forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.del, 10);
+      const m = state.movements[idx];
+      if (!m) return;
+      if (!confirm(`¿Eliminar "${m.label || "este movimiento"}"?`)) return;
+      state.movements.splice(idx, 1);
+      project();
+    };
+  });
+}
+
+// Confirmar que un cobro con tarjeta ya se acreditó (ajustar fecha/monto real)
+function confirmarAcreditacionTarjeta(idx) {
+  const m = state.movements[idx];
+  if (!m) return;
+  const hoy = new Date().toISOString().slice(0,10);
+  const fecha = prompt(`Confirmar acreditación de "${m.label}".\n\n¿En qué fecha se acreditó? (dejá vacío = hoy)`, m.date <= hoy ? m.date : hoy);
+  if (fecha === null) return;
+  const montoTxt = prompt(`¿Monto real acreditado? (lo que te depositaron, ya neto de comisiones)`, Math.abs(m.amount));
+  if (montoTxt === null) return;
+  const monto = parseFloat(montoTxt);
+  if (!monto || monto <= 0) { alert("Ingresá un monto válido."); return; }
+  m.date = fecha.trim() || hoy;
+  m.amount = Math.abs(monto) * (m.amount < 0 ? -1 : 1);
+  m.tarjetaEstado = "acreditado";
+  project();
 }
 
 // ── Proyección ───────────────────────────────────────────
@@ -2260,8 +2392,12 @@ function renderComprobantes() {
         <h2 class="inv-title">Cobranzas y Pagos</h2>
         <p class="inv-sub">Administrá tus facturas por cobrar y por pagar, con vencimientos y antigüedad de deuda. Todo lo pendiente ya se refleja en tu flujo de caja proyectado.</p>
       </div>
-      <button class="btn-primary" id="comp-add">+ Nueva factura</button>
+      <div class="comp-head-actions">
+        <button class="btn-ghost" id="afip-import-btn">↑ Importar de AFIP</button>
+        <button class="btn-primary" id="comp-add">+ Nueva factura</button>
+      </div>
     </div>
+    <input type="file" id="afip-file" accept=".xlsx,.xlsm" style="display:none">
 
     <div class="comp-tabs">
       <button class="comp-tab ${esCobrar?"active":""}" data-tab="cobrar">Por cobrar</button>
@@ -2299,6 +2435,135 @@ function renderComprobantes() {
   $("#comp-add").onclick = () => openCompModal(compTab);
   $$(".comp-saldar-btn").forEach(b => b.onclick = () => saldarComprobante(b.dataset.saldar));
   $$(".comp-del-btn").forEach(b => b.onclick = () => eliminarComprobante(b.dataset.del));
+  // Import de AFIP (Libro IVA Compras)
+  const afipBtn = $("#afip-import-btn");
+  if (afipBtn) {
+    afipBtn.onclick = () => $("#afip-file").click();
+    $("#afip-file").onchange = (e) => importarAfip(e);
+  }
+}
+
+// ── Import del Libro IVA Compras de AFIP ──────────────────
+let _afipData = null; // guarda el resultado del parseo para confirmar
+async function importarAfip(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const btn = $("#afip-import-btn");
+  const orig = btn.textContent;
+  btn.textContent = "Leyendo…";
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/afip/libro-iva", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!data.ok) { alert(data.error || "No se pudo leer el archivo de AFIP."); return; }
+    _afipData = data;
+    openAfipModal(data);
+  } catch {
+    alert("Error al leer el archivo. Verificá que sea el Libro IVA de AFIP en Excel.");
+  } finally {
+    btn.textContent = orig;
+    e.target.value = "";
+  }
+}
+
+function openAfipModal(data) {
+  const r = data.resumen;
+  const body = $("#afip-modal-body");
+  // Cuántos proveedores son nuevos (no están ya en el directorio por CUIT)
+  const cuitsExistentes = new Set(state.proveedores.map(p => (p.cuit||"").replace(/\D/g,"")));
+  const provNuevos = data.proveedores.filter(p => !cuitsExistentes.has(p.cuit));
+
+  body.innerHTML = `
+    <p class="afip-intro">Leímos tu <b>Libro IVA Compras</b> (hoja "${h(r.sheet)}"). Esto es lo que encontramos:</p>
+    <div class="afip-kpis">
+      <div class="afip-kpi"><b>${r.proveedores}</b><small>proveedores</small><span>${provNuevos.length} nuevos</span></div>
+      <div class="afip-kpi"><b>${r.comprobantes}</b><small>facturas de compra</small></div>
+      <div class="afip-kpi"><b>${money(r.total_iva)}</b><small>IVA discriminado</small></div>
+      <div class="afip-kpi"><b>${money(r.total)}</b><small>total facturado</small></div>
+    </div>
+
+    <div class="afip-choices">
+      <label class="afip-choice">
+        <input type="checkbox" id="afip-imp-prov" ${provNuevos.length?"checked":""} ${provNuevos.length?"":"disabled"}>
+        <span><b>Cargar ${provNuevos.length} proveedores nuevos</b> al directorio (CUIT + razón social)${provNuevos.length?"":" — ya los tenés todos"}</span>
+      </label>
+      <label class="afip-choice">
+        <input type="checkbox" id="afip-imp-comp">
+        <span><b>Cargar las ${r.comprobantes} facturas</b> como cuentas por pagar (con IVA discriminado)</span>
+      </label>
+    </div>
+    <p class="afip-warn" id="afip-comp-warn" style="display:none">⚠️ Son muchas facturas. Se cargarán todas como pendientes de pago — revisá los vencimientos después.</p>
+
+    <details class="afip-preview">
+      <summary>Ver los primeros proveedores</summary>
+      <table class="afip-table">
+        <thead><tr><th>CUIT</th><th>Proveedor</th><th>Comp.</th><th>Total</th></tr></thead>
+        <tbody>${data.proveedores.slice(0,15).map(p => `<tr>
+          <td class="mono">${h(p.cuitFmt)}</td><td>${h(p.nombre)}</td>
+          <td>${p.comprobantes}</td><td class="mono">${money(p.total)}</td></tr>`).join("")}</tbody>
+      </table>
+    </details>`;
+
+  $("#afip-imp-comp").onchange = (ev) => {
+    $("#afip-comp-warn").style.display = ev.target.checked ? "" : "none";
+  };
+  $("#afip-modal").classList.remove("hidden");
+}
+function closeAfipModal() { $("#afip-modal").classList.add("hidden"); _afipData = null; }
+
+function confirmarAfip() {
+  if (!_afipData) return;
+  const impProv = $("#afip-imp-prov")?.checked;
+  const impComp = $("#afip-imp-comp")?.checked;
+  let nProv = 0, nComp = 0;
+
+  if (impProv) {
+    const cuitsExistentes = new Set(state.proveedores.map(p => (p.cuit||"").replace(/\D/g,"")));
+    _afipData.proveedores.forEach(p => {
+      if (cuitsExistentes.has(p.cuit)) return;
+      state.proveedores.push({
+        id: "prov" + Math.random().toString(36).slice(2,8),
+        nombre: p.nombre, cuit: p.cuitFmt, rubro: "", contacto: "",
+        email: "", telefono: "", cbu: "",
+        condicionIVA: "Responsable Inscripto", plazoPago: 30,
+      });
+      nProv++;
+    });
+  }
+
+  if (impComp) {
+    const cuentaDefault = state.accounts.find(a => a.moneda === "ARS" && a.tipo !== "efectivo" && a.tipo !== "comitente")?.id
+      || state.accounts[0]?.id;
+    _afipData.comprobantes.forEach(c => {
+      // Vencimiento estimado: emisión + 30 días (AFIP no trae fecha de pago)
+      const venc = c.emision ? addDaysToISO(c.emision, 30) : new Date().toISOString().slice(0,10);
+      const comp = {
+        id: compId(), tipo: "pagar", contraparte: c.contraparte,
+        cuit: c.cuit, numero: c.numero, tipoComprobante: c.tipoComprobante,
+        monto: c.monto, moneda: c.moneda,
+        account: cuentaDefault,
+        emision: c.emision || new Date().toISOString().slice(0,10),
+        vencimiento: venc,
+        categoria: "proveedores", estado: "pendiente",
+        // Impuestos discriminados (de AFIP, sin estimar)
+        neto: c.neto, noGravado: c.noGravado, exento: c.exento, iva: c.iva,
+        origen: "afip",
+      };
+      state.comprobantes.push(comp);
+      generarMovComprobante(comp);
+      nComp++;
+    });
+  }
+
+  closeAfipModal();
+  saveState();
+  if (impComp) project();
+  renderComprobantes();
+  let msg = [];
+  if (nProv) msg.push(`${nProv} proveedores`);
+  if (nComp) msg.push(`${nComp} facturas`);
+  alert(msg.length ? `Importado de AFIP: ${msg.join(" y ")}.` : "No se importó nada (elegí al menos una opción).");
 }
 
 let compModalTipo = "cobrar";
@@ -2308,11 +2573,22 @@ function openCompModal(tipo) {
   $("#c-contraparte").value = "";
   $("#c-numero").value = "";
   $("#c-monto").value = "";
+  ["c-neto","c-iva","c-nograv","c-exento"].forEach(id => { if($("#"+id)) $("#"+id).value = ""; });
   $("#c-emision").value = new Date().toISOString().slice(0,10);
   const v = new Date(); v.setDate(v.getDate()+30);
   $("#c-vencimiento").value = v.toISOString().slice(0,10);
   syncCompAccount();
   syncCompCategoria();
+  // Auto-calcular el total desde el desglose de impuestos
+  const recalcTotal = () => {
+    const neto = parseFloat($("#c-neto").value) || 0;
+    const iva = parseFloat($("#c-iva").value) || 0;
+    const ng = parseFloat($("#c-nograv").value) || 0;
+    const ex = parseFloat($("#c-exento").value) || 0;
+    const suma = neto + iva + ng + ex;
+    if (suma > 0) $("#c-monto").value = Math.round(suma);
+  };
+  ["c-neto","c-iva","c-nograv","c-exento"].forEach(id => { if($("#"+id)) $("#"+id).oninput = recalcTotal; });
   $("#comp-modal").classList.remove("hidden");
   setTimeout(()=>$("#c-contraparte").focus(), 50);
 }
@@ -2349,6 +2625,11 @@ function saveCompFromModal() {
     monto: Math.abs(monto), moneda: acc ? acc.moneda : "ARS", account,
     emision: $("#c-emision").value, vencimiento: $("#c-vencimiento").value,
     categoria: $("#c-categoria").value, estado: "pendiente",
+    // Impuestos discriminados (opcionales)
+    neto: parseFloat($("#c-neto").value) || 0,
+    iva: parseFloat($("#c-iva").value) || 0,
+    noGravado: parseFloat($("#c-nograv").value) || 0,
+    exento: parseFloat($("#c-exento").value) || 0,
   };
   state.comprobantes.push(comp);
   generarMovComprobante(comp);
@@ -3859,12 +4140,14 @@ function proximosVencimientosImpositivos() {
   const montoCargas = buscarMonto("cargas", ["cargas","suss","931"], 6200000);
 
   // Definición de impuestos y su día de vencimiento mensual (aprox.)
+  const imp = state.impuestos || {};
+  const activo = (k) => imp[k] !== undefined ? imp[k] : true; // por defecto activos
   const defs = [
-    { concepto: "IVA (DDJJ mensual)", org: "AFIP", dia: 18, monto: montoIVA, cat: "iva" },
-    { concepto: "IIBB (Ingresos Brutos)", org: "ARBA", dia: 15, monto: montoIIBB, cat: "iibb" },
-    { concepto: "Cargas sociales (F.931)", org: "AFIP", dia: 12, monto: montoCargas, cat: "cargas" },
-    { concepto: "Anticipo Ganancias", org: "AFIP", dia: 22, monto: montoGanancias, cat: "ganancias", bimestral: true },
-  ];
+    { concepto: "IVA (DDJJ mensual)", org: "AFIP", dia: 18, monto: montoIVA, cat: "iva", flag: "ivaOn" },
+    { concepto: "IIBB (Ingresos Brutos)", org: "ARBA", dia: 15, monto: montoIIBB, cat: "iibb", flag: "iibbOn" },
+    { concepto: "Cargas sociales (F.931)", org: "AFIP", dia: 12, monto: montoCargas, cat: "cargas", flag: "cargasOn" },
+    { concepto: "Anticipo Ganancias", org: "AFIP", dia: 22, monto: montoGanancias, cat: "ganancias", bimestral: true, flag: "gananciasOn" },
+  ].filter(d => activo(d.flag));
 
   const vtos = [];
   for (let mesOffset = 0; mesOffset < 3; mesOffset++) {
@@ -3956,6 +4239,338 @@ function renderCalendarioImpuestos() {
   };
 }
 
+// ── Retenciones y percepciones sufridas (crédito fiscal) ──
+function renderRetenciones() {
+  const host = $("#imp-retenciones");
+  if (!host) return;
+  const rets = state.retenciones || [];
+
+  if (!rets.length) {
+    host.innerHTML = `
+      <div class="reten-card reten-empty">
+        <div>
+          <h3>Retenciones y percepciones sufridas</h3>
+          <p>Importá tus retenciones y percepciones de AFIP (SICORE, Aduana, Ganancias). Son crédito fiscal: plata que ya pagaste a cuenta de un impuesto.</p>
+        </div>
+        <button class="btn-primary" id="reten-import-btn">↑ Importar de AFIP</button>
+      </div>
+      <input type="file" id="reten-file" accept=".xls,.xlsx" style="display:none">`;
+    wireRetenImport();
+    return;
+  }
+
+  // Agrupar por impuesto
+  const porImp = {};
+  rets.forEach(r => {
+    const k = r.impuesto || "(sin descripción)";
+    if (!porImp[k]) porImp[k] = { impuesto: k, cantidad: 0, retenciones: 0, percepciones: 0 };
+    porImp[k].cantidad++;
+    if (r.tipo === "percepcion") porImp[k].percepciones += (r.importe || 0);
+    else porImp[k].retenciones += (r.importe || 0);
+  });
+  const grupos = Object.values(porImp).sort((a,b) => (b.retenciones+b.percepciones) - (a.retenciones+a.percepciones));
+  const totalRet = rets.filter(r=>r.tipo!=="percepcion").reduce((s,r)=>s+(r.importe||0),0);
+  const totalPer = rets.filter(r=>r.tipo==="percepcion").reduce((s,r)=>s+(r.importe||0),0);
+
+  host.innerHTML = `
+    <div class="reten-card">
+      <div class="reten-head">
+        <div>
+          <h3>Retenciones y percepciones sufridas</h3>
+          <p>Crédito fiscal acumulado — se descuenta de lo que tenés que pagar.</p>
+        </div>
+        <div class="reten-actions">
+          <button class="btn-ghost sm" id="reten-import-btn">↑ Importar más</button>
+          <button class="btn-ghost sm reten-clear" id="reten-clear-btn">Vaciar</button>
+        </div>
+      </div>
+      <div class="reten-kpis">
+        <div class="reten-kpi"><small>Retenciones</small><b>${money(totalRet)}</b></div>
+        <div class="reten-kpi"><small>Percepciones</small><b>${money(totalPer)}</b></div>
+        <div class="reten-kpi total"><small>Crédito fiscal total</small><b>${money(totalRet+totalPer)}</b></div>
+      </div>
+      <table class="reten-table">
+        <thead><tr><th>Impuesto</th><th>Cant.</th><th>Retenciones</th><th>Percepciones</th></tr></thead>
+        <tbody>${grupos.map(g => `<tr>
+          <td>${h(g.impuesto)}</td>
+          <td class="mono">${g.cantidad}</td>
+          <td class="mono">${g.retenciones ? money(g.retenciones) : "—"}</td>
+          <td class="mono">${g.percepciones ? money(g.percepciones) : "—"}</td>
+        </tr>`).join("")}</tbody>
+      </table>
+    </div>
+    <input type="file" id="reten-file" accept=".xls,.xlsx" style="display:none">`;
+  wireRetenImport();
+  const clr = $("#reten-clear-btn");
+  if (clr) clr.onclick = () => {
+    if (!confirm("¿Vaciar todas las retenciones y percepciones importadas?")) return;
+    state.retenciones = []; saveState(); renderRetenciones();
+  };
+}
+
+function wireRetenImport() {
+  const btn = $("#reten-import-btn");
+  if (!btn) return;
+  btn.onclick = () => $("#reten-file").click();
+  $("#reten-file").onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const orig = btn.textContent;
+    btn.textContent = "Leyendo…";
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/afip/retenciones", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!data.ok) { alert(data.error || "No se pudo leer el archivo."); return; }
+      // Agregar evitando duplicar por certificado
+      const existentes = new Set(state.retenciones.map(r => r.certificado).filter(Boolean));
+      let n = 0;
+      data.items.forEach(it => {
+        if (it.certificado && existentes.has(it.certificado)) return;
+        state.retenciones.push(it);
+        n++;
+      });
+      saveState();
+      renderRetenciones();
+      const r = data.resumen;
+      alert(`Importadas ${n} retenciones/percepciones de AFIP.\nRetenciones: ${money(r.total_retenciones)} · Percepciones: ${money(r.total_percepciones)}`);
+    } catch {
+      alert("Error al leer el archivo. Verificá que sea el export de AFIP (.xls o .xlsx).");
+    } finally {
+      btn.textContent = orig;
+      e.target.value = "";
+    }
+  };
+}
+
+
+// ═══ CONTABILIDAD (Estado de Resultados + Sumas y Saldos) ═
+// Por DEVENGADO: usa la fecha de EMISIÓN de las facturas (cuándo nació el
+// derecho/obligación), no la de cobro/pago. Los movimientos que no vienen
+// de una factura se toman por su fecha, para no duplicar.
+let contaTab = "resultados";
+let contaPeriodo = "anio"; // mes | anio | todo
+
+function contaRango() {
+  const hoy = new Date();
+  if (contaPeriodo === "mes") {
+    const from = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    const to = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0);
+    return { from: from.toISOString().slice(0,10), to: to.toISOString().slice(0,10), label: hoy.toLocaleDateString("es-AR",{month:"long",year:"numeric"}) };
+  }
+  if (contaPeriodo === "anio") {
+    return { from: `${hoy.getFullYear()}-01-01`, to: `${hoy.getFullYear()}-12-31`, label: `Año ${hoy.getFullYear()}` };
+  }
+  return { from: "1900-01-01", to: "2100-12-31", label: "Todo el historial" };
+}
+
+// Devuelve los resultados devengados del período agrupados por rubro.
+function calcularResultados(from, to) {
+  const dentro = (iso) => iso && iso >= from && iso <= to;
+  // Rubro -> monto acumulado (positivo = ingreso, negativo = gasto)
+  const acum = {}; // rubro -> {rubro, grupo, monto}
+  const add = (cat, monto) => {
+    const r = rubroDe(cat);
+    const key = r.rubro;
+    if (!acum[key]) acum[key] = { rubro: r.rubro, grupo: r.grupo, monto: 0 };
+    acum[key].monto += monto;
+  };
+
+  // 1) Facturas (comprobantes): devengan en su fecha de EMISIÓN.
+  //    Cobrar = ingreso (ventas); Pagar = gasto (según categoría).
+  state.comprobantes.forEach(c => {
+    if (!dentro(c.emision)) return;
+    // Usar el neto si está discriminado (sin IVA, que no es resultado); si no, el monto.
+    const base = (c.neto && c.neto > 0) ? c.neto : c.monto;
+    if (c.tipo === "cobrar") add("ventas", Math.abs(base));
+    else add(c.categoria || "proveedores", -Math.abs(base));
+  });
+
+  // 2) Movimientos que NO vienen de factura ni de inversión: por su fecha.
+  //    (los de factura ya se contaron arriba; los de inversión no son resultado)
+  state.movements.forEach(m => {
+    if (m.compId || m.invId) return; // ya contados / no son resultado
+    if (m.movTipo === "inversion" || m.movTipo === "rescate") return;
+    if (!m.amount || !dentro(m.date)) return;
+    const cat = movCategoria(m);
+    if (!cat) return;
+    add(cat, m.amount);
+  });
+
+  return acum;
+}
+
+function renderContabilidad() {
+  const wrap = $("#conta-wrap");
+  const { from, to, label } = contaRango();
+
+  wrap.innerHTML = `
+    <div class="mkt-head"><div class="eyebrow">Contabilidad</div>
+      <h2 class="inv-title">Estado de Resultados y Sumas y Saldos</h2>
+      <p class="inv-sub">Por devengado: cuenta las operaciones cuando las hacés (fecha de la factura), no cuando cobrás o pagás.</p></div>
+
+    <div class="conta-bar">
+      <div class="conta-tabs">
+        <button class="conta-tab ${contaTab==="resultados"?"active":""}" data-ctab="resultados">Estado de Resultados</button>
+        <button class="conta-tab ${contaTab==="sumas"?"active":""}" data-ctab="sumas">Sumas y Saldos</button>
+      </div>
+      <div class="conta-periodo">
+        <button class="cper ${contaPeriodo==="mes"?"active":""}" data-cper="mes">Este mes</button>
+        <button class="cper ${contaPeriodo==="anio"?"active":""}" data-cper="anio">Este año</button>
+        <button class="cper ${contaPeriodo==="todo"?"active":""}" data-cper="todo">Todo</button>
+      </div>
+    </div>
+
+    <div id="conta-body"></div>`;
+
+  $$(".conta-tab").forEach(b => b.onclick = () => { contaTab = b.dataset.ctab; renderContabilidad(); });
+  $$(".cper").forEach(b => b.onclick = () => { contaPeriodo = b.dataset.cper; renderContabilidad(); });
+
+  if (contaTab === "resultados") renderEstadoResultados(from, to, label);
+  else renderSumasSaldos(from, to, label);
+}
+
+function renderEstadoResultados(from, to, label) {
+  const body = $("#conta-body");
+  const acum = calcularResultados(from, to);
+  const rubros = Object.values(acum);
+
+  // Agrupar por grupo del plan de cuentas
+  const porGrupo = {};
+  GRUPOS_RESULTADO.forEach(g => porGrupo[g.g] = []);
+  rubros.forEach(r => { (porGrupo[r.grupo] = porGrupo[r.grupo] || []).push(r); });
+
+  const totalIngresos = rubros.filter(r=>r.grupo==="ingresos").reduce((s,r)=>s+r.monto,0);
+  const totalCostos = Math.abs(rubros.filter(r=>r.grupo==="costos").reduce((s,r)=>s+r.monto,0));
+  const totalGastos = Math.abs(rubros.filter(r=>r.grupo==="gastos").reduce((s,r)=>s+r.monto,0));
+  const totalImp = Math.abs(rubros.filter(r=>r.grupo==="impuestos").reduce((s,r)=>s+r.monto,0));
+  const totalFin = Math.abs(rubros.filter(r=>r.grupo==="financieros").reduce((s,r)=>s+r.monto,0));
+  const resultadoBruto = totalIngresos - totalCostos;
+  const resultadoOperativo = resultadoBruto - totalGastos;
+  const resultadoNeto = resultadoOperativo - totalImp - totalFin;
+
+  const filaGrupo = (grupoKey, gLabel) => {
+    const items = (porGrupo[grupoKey] || []).filter(r => Math.abs(r.monto) > 0.01);
+    if (!items.length) return "";
+    return `<tr class="er-grupo"><td colspan="2">${gLabel}</td></tr>` +
+      items.sort((a,b)=>Math.abs(b.monto)-Math.abs(a.monto)).map(r =>
+        `<tr class="er-rubro"><td>${h(r.rubro)}</td><td class="mono">${money(Math.abs(r.monto))}</td></tr>`).join("");
+  };
+  const filaTotal = (txt, val, cls="") => `<tr class="er-total ${cls}"><td>${txt}</td><td class="mono">${money(val)}</td></tr>`;
+
+  const hayDatos = rubros.some(r => Math.abs(r.monto) > 0.01);
+
+  body.innerHTML = `
+    <div class="table-card conta-report">
+      <div class="conta-report-head">
+        <h3>Estado de Resultados</h3>
+        <span class="conta-period-label">${h(label)}</span>
+      </div>
+      ${hayDatos ? `<table class="er-table">
+        <tbody>
+          ${filaGrupo("ingresos","INGRESOS")}
+          ${filaTotal("Total ingresos", totalIngresos, "sub")}
+          ${filaGrupo("costos","COSTOS DIRECTOS")}
+          ${totalCostos ? filaTotal("Resultado bruto", resultadoBruto, "hl") : ""}
+          ${filaGrupo("gastos","GASTOS OPERATIVOS")}
+          ${filaTotal("Resultado operativo", resultadoOperativo, "hl") }
+          ${filaGrupo("impuestos","IMPUESTOS")}
+          ${filaGrupo("financieros","RESULTADOS FINANCIEROS")}
+          <tr class="er-neto ${resultadoNeto>=0?'pos':'neg'}"><td>RESULTADO NETO ${resultadoNeto>=0?"(Ganancia)":"(Pérdida)"}</td><td class="mono">${money(resultadoNeto)}</td></tr>
+        </tbody>
+      </table>
+      <button class="btn-ghost sm conta-export" id="er-export">↓ Descargar (CSV)</button>` :
+      `<p class="cf-empty">No hay operaciones devengadas en ${h(label)}. Cargá facturas o movimientos para ver el resultado.</p>`}
+    </div>
+    <p class="conta-note">Devengado: las ventas y gastos se cuentan por la fecha de la factura, aunque el cobro o pago ocurra en otro momento. El IVA no forma parte del resultado (es un pasivo/crédito, no un ingreso ni un gasto).</p>`;
+
+  const exp = $("#er-export");
+  if (exp) exp.onclick = () => exportarEstadoResultados(acum, label);
+}
+
+function renderSumasSaldos(from, to, label) {
+  const body = $("#conta-body");
+  // Sumas y saldos simplificado: cuentas patrimoniales (saldos hoy) + de
+  // resultado (acumulado del período), en formato Debe/Haber/Saldo.
+  const cuentas = [];
+
+  // Patrimoniales: cada cuenta bancaria/caja con su saldo
+  state.accounts.forEach(a => {
+    const saldo = saldoCuentaAFecha(a);
+    cuentas.push({ nombre: a.name, tipo: "Activo", debe: saldo >= 0 ? saldo : 0, haber: saldo < 0 ? -saldo : 0 });
+  });
+  // Inversiones (activo)
+  const colocado = totalColocado("ARS");
+  if (colocado > 0) cuentas.push({ nombre: "Inversiones (colocado)", tipo: "Activo", debe: colocado, haber: 0 });
+  // Cuentas por cobrar / pagar (pendientes)
+  const porCobrar = state.comprobantes.filter(c=>c.tipo==="cobrar"&&c.estado!=="saldado").reduce((s,c)=>s+(c.monto||0),0);
+  const porPagar = state.comprobantes.filter(c=>c.tipo==="pagar"&&c.estado!=="saldado").reduce((s,c)=>s+(c.monto||0),0);
+  if (porCobrar > 0) cuentas.push({ nombre: "Deudores por ventas", tipo: "Activo", debe: porCobrar, haber: 0 });
+  if (porPagar > 0) cuentas.push({ nombre: "Proveedores", tipo: "Pasivo", debe: 0, haber: porPagar });
+  // Crédito fiscal (retenciones/percepciones)
+  const credFiscal = (state.retenciones||[]).reduce((s,r)=>s+(r.importe||0),0);
+  if (credFiscal > 0) cuentas.push({ nombre: "Crédito fiscal (ret./perc.)", tipo: "Activo", debe: credFiscal, haber: 0 });
+
+  // De resultado: ingresos (haber) y gastos (debe)
+  const acum = calcularResultados(from, to);
+  Object.values(acum).forEach(r => {
+    if (Math.abs(r.monto) < 0.01) return;
+    if (r.grupo === "ingresos") cuentas.push({ nombre: r.rubro, tipo: "Resultado +", debe: 0, haber: r.monto });
+    else cuentas.push({ nombre: r.rubro, tipo: "Resultado −", debe: Math.abs(r.monto), haber: 0 });
+  });
+
+  const totalDebe = cuentas.reduce((s,c)=>s+c.debe,0);
+  const totalHaber = cuentas.reduce((s,c)=>s+c.haber,0);
+
+  body.innerHTML = `
+    <div class="table-card conta-report">
+      <div class="conta-report-head">
+        <h3>Sumas y Saldos</h3>
+        <span class="conta-period-label">${h(label)}</span>
+      </div>
+      <div class="cf-table-scroll">
+        <table class="ss-table">
+          <thead><tr><th>Cuenta</th><th>Tipo</th><th>Debe</th><th>Haber</th></tr></thead>
+          <tbody>
+            ${cuentas.map(c => `<tr>
+              <td>${h(c.nombre)}</td>
+              <td><span class="ss-tipo">${h(c.tipo)}</span></td>
+              <td class="mono">${c.debe?money(c.debe):"—"}</td>
+              <td class="mono">${c.haber?money(c.haber):"—"}</td>
+            </tr>`).join("")}
+            <tr class="ss-total"><td colspan="2">TOTALES</td><td class="mono">${money(totalDebe)}</td><td class="mono">${money(totalHaber)}</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <button class="btn-ghost sm conta-export" id="ss-export">↓ Descargar (CSV)</button>
+    </div>
+    <p class="conta-note">Sumas y saldos simplificado: activos y pasivos por su saldo actual, más las cuentas de resultado del período. Es una vista de gestión, no un balance legal — validá con tu contador.</p>`;
+
+  const exp = $("#ss-export");
+  if (exp) exp.onclick = () => exportarSumasSaldos(cuentas, label);
+}
+
+function exportarEstadoResultados(acum, label) {
+  const rows = [["Rubro","Grupo","Monto"]];
+  Object.values(acum).forEach(r => rows.push([r.rubro, r.grupo, r.monto.toFixed(2)]));
+  descargarCSV(rows, `estado_resultados_${label.replace(/\s+/g,"_")}.csv`);
+}
+function exportarSumasSaldos(cuentas, label) {
+  const rows = [["Cuenta","Tipo","Debe","Haber"]];
+  cuentas.forEach(c => rows.push([c.nombre, c.tipo, c.debe.toFixed(2), c.haber.toFixed(2)]));
+  descargarCSV(rows, `sumas_y_saldos_${label.replace(/\s+/g,"_")}.csv`);
+}
+function descargarCSV(rows, filename) {
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob = new Blob(["\ufeff"+csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+
 function renderImpuestos() {
   const wrap = $("#imp-wrap");
   if (!state.impOps) {
@@ -3972,6 +4587,8 @@ function renderImpuestos() {
       <p class="inv-sub">Tu calendario de vencimientos impositivos y un estimador de cuánto vas a pagar. Los vencimientos se pueden llevar al flujo de caja.</p></div>
 
     <div id="imp-calendario"></div>
+
+    <div id="imp-retenciones"></div>
 
     <div class="imp-estimador-head">
       <h3>Estimador de impuestos</h3>
@@ -3994,6 +4611,7 @@ function renderImpuestos() {
     </div>`;
 
   renderCalendarioImpuestos();
+  renderRetenciones();
 
   const renderOps = () => {
     $("#imp-ops").innerHTML = state.impOps.map((op, i) => `
@@ -4257,15 +4875,39 @@ function renderConfig() {
       </div>
       <button class="btn-primary sm cfg-save-btn" id="cfg-save-empresa">Guardar cambios</button>`;
   } else if (sec === "impuestos") {
+    const imp = state.impuestos || {};
+    const on = (k, def) => imp[k] !== undefined ? imp[k] : def;
     panel = `
       <div class="cfg-sec-head"><h3>Parámetros impositivos</h3></div>
-      <p class="cfg-hint">Alícuotas de referencia para la proyección impositiva. Validalas con tu contador según tu actividad y provincia.</p>
-      <div class="cfg-grid">
-        <label class="field"><span>IVA (%)</span>
-          <input type="number" id="cfg-iva" value="${state.impuestos.iva}" step="0.5"></label>
-        <label class="field"><span>Ingresos Brutos (%)</span>
-          <input type="number" id="cfg-iibb" value="${state.impuestos.iibb}" step="0.1"></label>
+      <p class="cfg-hint">Elegí qué impuestos te aplican y sus alícuotas de referencia. Validalas con tu contador según tu actividad y provincia.</p>
+      <div class="cfg-tax-list">
+        <label class="cfg-tax-item">
+          <input type="checkbox" id="tax-iva-on" ${on("ivaOn",true)?"checked":""}>
+          <span class="cfg-tax-name">IVA</span>
+          <span class="cfg-tax-rate"><input type="number" id="cfg-iva" value="${imp.iva ?? 21}" step="0.5"><em>%</em></span>
+        </label>
+        <label class="cfg-tax-item">
+          <input type="checkbox" id="tax-iibb-on" ${on("iibbOn",true)?"checked":""}>
+          <span class="cfg-tax-name">Ingresos Brutos (IIBB)</span>
+          <span class="cfg-tax-rate"><input type="number" id="cfg-iibb" value="${imp.iibb ?? 3}" step="0.1"><em>%</em></span>
+        </label>
+        <label class="cfg-tax-item">
+          <input type="checkbox" id="tax-debcred-on" ${on("debcredOn",true)?"checked":""}>
+          <span class="cfg-tax-name">Impuesto a los débitos y créditos</span>
+          <span class="cfg-tax-rate"><input type="number" id="cfg-debcred" value="${imp.debcred ?? 1.2}" step="0.1"><em>%</em></span>
+        </label>
+        <label class="cfg-tax-item">
+          <input type="checkbox" id="tax-ganancias-on" ${on("gananciasOn",true)?"checked":""}>
+          <span class="cfg-tax-name">Ganancias (anticipos)</span>
+          <span class="cfg-tax-rate"><input type="number" id="cfg-ganancias" value="${imp.ganancias ?? 35}" step="1"><em>%</em></span>
+        </label>
+        <label class="cfg-tax-item">
+          <input type="checkbox" id="tax-cargas-on" ${on("cargasOn",true)?"checked":""}>
+          <span class="cfg-tax-name">Cargas sociales (F.931)</span>
+          <span class="cfg-tax-rate cfg-tax-norate">sobre sueldos</span>
+        </label>
       </div>
+      <p class="cfg-hint" style="margin-top:10px">Los que dejes tildados aparecen en el calendario de vencimientos y en el estimador.</p>
       <button class="btn-primary sm cfg-save-btn" id="cfg-save-imp">Guardar cambios</button>`;
   } else if (sec === "preferencias") {
     panel = `
@@ -4286,9 +4928,8 @@ function renderConfig() {
   } else if (sec === "datos") {
     panel = `
       <div class="cfg-sec-head"><h3>Datos y respaldo</h3></div>
-      <p class="cfg-hint">Todos tus datos se guardan en este navegador. Podés reiniciar la app o cargar el ejemplo de demostración.</p>
+      <p class="cfg-hint">Todos tus datos se guardan en este navegador. Podés reiniciar la app para empezar de cero.</p>
       <div class="cfg-datos-actions">
-        <button class="btn-ghost" id="cfg-load-demo">Cargar ejemplo (constructora)</button>
         <button class="btn-ghost cfg-danger" id="cfg-reset">Borrar todos mis datos</button>
       </div>
       <p class="cfg-hint" style="margin-top:12px">La app guarda automáticamente cada cambio. Si algo se ve raro, probá recargar con Cmd/Ctrl+Shift+R.</p>`;
@@ -4315,10 +4956,6 @@ function renderConfig() {
 
   // Sección Datos
   if (sec === "datos") {
-    $("#cfg-load-demo").onclick = () => {
-      if (!confirm("Esto reemplaza tus datos actuales por el ejemplo de la constructora. ¿Seguir?")) return;
-      loadDemoDataset(DEMO_CONSTRUCTORA); saveState(); project(); switchView("dashboard");
-    };
     $("#cfg-reset").onclick = () => {
       if (!confirm("¿Borrar TODOS tus datos? Esta acción no se puede deshacer.")) return;
       localStorage.removeItem(STORE_KEY); location.reload();
@@ -4336,8 +4973,16 @@ function renderConfig() {
   }
   if (sec === "impuestos") {
     $("#cfg-save-imp").onclick = () => {
-      state.impuestos.iva = parseFloat($("#cfg-iva").value) || 0;
-      state.impuestos.iibb = parseFloat($("#cfg-iibb").value) || 0;
+      const i = state.impuestos;
+      i.ivaOn = $("#tax-iva-on").checked;
+      i.iibbOn = $("#tax-iibb-on").checked;
+      i.debcredOn = $("#tax-debcred-on").checked;
+      i.gananciasOn = $("#tax-ganancias-on").checked;
+      i.cargasOn = $("#tax-cargas-on").checked;
+      i.iva = parseFloat($("#cfg-iva").value) || 0;
+      i.iibb = parseFloat($("#cfg-iibb").value) || 0;
+      i.debcred = parseFloat($("#cfg-debcred").value) || 0;
+      i.ganancias = parseFloat($("#cfg-ganancias").value) || 0;
       saveState(); flashSaved();
     };
     return;
@@ -4450,24 +5095,19 @@ function switchView(view) {
   if (view === "mercado") renderMercado();
   if (view === "fci") renderFCI();
   if (view === "impuestos") renderImpuestos();
+  if (view === "contabilidad") renderContabilidad();
   if (view === "conciliacion") renderConciliacion();
   if (view === "config") renderConfig();
 }
 
 // ── Init ─────────────────────────────────────────────────
 function init() {
-  // ¿Demo específico por URL? (?demo=constructora) — pisa lo guardado
-  const demoParam = new URLSearchParams(location.search).get("demo");
-  if (demoParam === "constructora" && typeof DEMO_CONSTRUCTORA !== "undefined") {
-    loadDemoDataset(DEMO_CONSTRUCTORA);
-  } else if (loadState()) {
+  if (loadState()) {
     // Estado restaurado desde el navegador: aplicar prefs al panel
     if ($("#buffer")) $("#buffer").value = state.prefs.colchon;
     if ($("#horizon")) $("#horizon").value = state.prefs.horizonte;
   } else {
-    // Primera vez (Calce normal, sin datos guardados): demo MÍNIMA.
-    // Solo para que la app no arranque en blanco. El ejemplo completo
-    // es el de la constructora (?demo=constructora).
+    // Primera vez, sin datos guardados: demo mínima para no arrancar en blanco.
     state.accounts = [
       { id: "acc-cc", name: "Cuenta corriente", banco: "Banco de la Nación Argentina", tipo: "cc", moneda: "ARS", alias: "", opening: 2000000 },
       { id: "acc-caja", name: "Caja / Efectivo", banco: "", tipo: "efectivo", moneda: "ARS", alias: "", opening: 150000 },
@@ -4514,6 +5154,11 @@ function init() {
   $("#c-account").addEventListener("change", syncCompAccount);
 
   // Modal de proveedor
+  // Modal de import AFIP
+  $("#afip-modal-confirm").addEventListener("click", confirmarAfip);
+  $("#afip-modal-close").addEventListener("click", closeAfipModal);
+  $("#afip-modal-cancel").addEventListener("click", closeAfipModal);
+
   $("#prov-modal-save").addEventListener("click", saveProvFromModal);
   $("#prov-modal-close").addEventListener("click", closeProvModal);
   $("#prov-modal-cancel").addEventListener("click", closeProvModal);

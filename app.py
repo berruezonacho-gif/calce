@@ -378,6 +378,32 @@ async def cashflow_import(file: UploadFile = File(...)):
     return importer.parse_movements(content, file.filename or "")
 
 
+@app.post("/api/afip/libro-iva")
+async def afip_libro_iva(file: UploadFile = File(...)):
+    """Importa el Libro IVA Compras de AFIP.
+
+    Devuelve proveedores únicos (CUIT + denominación) y las facturas de
+    compra con importes discriminados (neto, no gravado, exento, IVA, total).
+    """
+    content = await file.read()
+    if len(content) > 8 * 1024 * 1024:
+        return {"ok": False, "error": "El archivo es muy grande (máximo 8 MB)."}
+    return importer.parse_libro_iva(content, file.filename or "")
+
+
+@app.post("/api/afip/retenciones")
+async def afip_retenciones(file: UploadFile = File(...)):
+    """Importa un export de 'Mis Retenciones y Percepciones' de AFIP.
+
+    Funciona con SICORE, Aduana y Ganancias (mismo formato). Devuelve las
+    retenciones/percepciones sufridas, agrupadas por impuesto.
+    """
+    content = await file.read()
+    if len(content) > 8 * 1024 * 1024:
+        return {"ok": False, "error": "El archivo es muy grande (máximo 8 MB)."}
+    return importer.parse_retenciones(content, file.filename or "")
+
+
 @app.get("/api/tasas/caucion")
 def tasas_caucion(force: bool = False):
     """Tasa de caución bursátil (Índice BYMA a 1 día) y curva por plazos."""

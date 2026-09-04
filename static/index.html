@@ -36,6 +36,7 @@
         </div>
       </div>
       <button class="nav-item" data-view="impuestos">Impuestos</button>
+      <button class="nav-item" data-view="contabilidad">Contabilidad</button>
       <button class="nav-item" data-view="conciliacion">Conciliación</button>
       <button class="nav-item nav-config" data-view="config" title="Configuración">⚙ Configuración</button>
     </nav>
@@ -71,7 +72,7 @@
               </div>
             </div>
             <input type="file" id="import-file" accept=".xlsx,.xls,.csv" style="display:none">
-            <p class="mov-hint-panel">Cargá tus ingresos y gastos. Los vas a ver en el detalle por fecha, donde podés tocar cualquiera para editarlo.</p>
+            <div id="mov-summary"></div>
           </div>
           <!-- Ocultos: mantienen la lógica de proyección -->
           <input type="hidden" id="buffer" value="0">
@@ -168,6 +169,11 @@
     <!-- Vista Impuestos -->
     <section class="view hidden" id="view-impuestos">
       <div class="imp-wrap" id="imp-wrap"></div>
+    </section>
+
+    <!-- Vista Contabilidad (Estado de Resultados + Sumas y Saldos) -->
+    <section class="view hidden" id="view-contabilidad">
+      <div class="conta-wrap" id="conta-wrap"></div>
     </section>
 
     <!-- Vista Conciliación bancaria -->
@@ -286,6 +292,15 @@
             <option value="tarjeta">Tarjeta</option>
           </select>
         </label>
+        <div class="field" id="m-tarjeta-field" style="display:none">
+          <span>Acreditación de la tarjeta</span>
+          <select id="m-tarjeta-plazo">
+            <option value="2">Débito · acredita en ~48 hs</option>
+            <option value="18">Crédito · acredita en ~18 días</option>
+            <option value="custom">Otra fecha (la elijo abajo)</option>
+          </select>
+          <small>La plata cae en el flujo de caja en la fecha estimada de acreditación. Después la podés confirmar.</small>
+        </div>
         <label class="field"><span>Cuenta</span>
           <select id="m-account"></select>
         </label>
@@ -372,13 +387,33 @@
           </label>
         </div>
         <div class="modal-row">
-          <label class="field"><span>Monto</span>
+          <label class="field"><span>Monto total</span>
             <div class="money-input"><em id="c-cur">$</em><input type="number" id="c-monto" placeholder="0" step="1000"></div>
           </label>
           <label class="field"><span>Cuenta destino</span>
             <select id="c-account"></select>
           </label>
         </div>
+        <details class="comp-iva-details">
+          <summary>Discriminar impuestos (opcional)</summary>
+          <div class="modal-row">
+            <label class="field"><span>Neto gravado</span>
+              <div class="money-input"><em>$</em><input type="number" id="c-neto" placeholder="0" step="1000"></div>
+            </label>
+            <label class="field"><span>IVA</span>
+              <div class="money-input"><em>$</em><input type="number" id="c-iva" placeholder="0" step="1000"></div>
+            </label>
+          </div>
+          <div class="modal-row">
+            <label class="field"><span>No gravado</span>
+              <div class="money-input"><em>$</em><input type="number" id="c-nograv" placeholder="0" step="1000"></div>
+            </label>
+            <label class="field"><span>Exento</span>
+              <div class="money-input"><em>$</em><input type="number" id="c-exento" placeholder="0" step="1000"></div>
+            </label>
+          </div>
+          <p class="comp-iva-hint" id="c-iva-hint">Si cargás el neto y el IVA, el total se calcula solo.</p>
+        </details>
         <div class="modal-row">
           <label class="field"><span>Fecha de emisión</span>
             <input type="date" id="c-emision">
@@ -400,6 +435,21 @@
   </div>
 
   <!-- Modal: proveedor (directorio) -->
+  <!-- Modal: importar de AFIP (Libro IVA Compras) -->
+  <div class="modal-overlay hidden" id="afip-modal">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h3>Importar de AFIP</h3>
+        <button class="modal-close" id="afip-modal-close">×</button>
+      </div>
+      <div class="modal-body" id="afip-modal-body"></div>
+      <div class="modal-foot">
+        <button class="btn-ghost" id="afip-modal-cancel">Cancelar</button>
+        <button class="btn-primary" id="afip-modal-confirm">Importar lo seleccionado</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay hidden" id="prov-modal">
     <div class="modal">
       <div class="modal-header">
@@ -453,7 +503,6 @@
   <div class="save-indicator" id="save-indicator">✓ Guardado</div>
 
   <script src="/static/bancos.js?v=1"></script>
-  <script src="/static/demo_constructora.js?v=1"></script>
   <script src="/static/app.js?v=1"></script>
 </body>
 </html>
