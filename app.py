@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from data import cashflow
 from data import ons_static, sovereign_static, bonds
 from data import renta_fija
+from data import bymadata
 from data import bcra
 from data import fci
 from data import importer
@@ -92,9 +93,29 @@ def inversiones_soberanos():
 
 @app.get("/api/inversiones/ons")
 def inversiones_ons():
-    """Lista de ONs con condiciones de emisión curadas."""
+    """Lista de ONs con condiciones de emisión + precio en vivo y TIR.
+
+    Cruza las condiciones curadas (cupón, amortización, vencimiento) con el
+    precio en vivo de BYMA para calcular la TIR/rendimiento de cada ON, sin
+    que el usuario tenga que simular una por una. Si BYMA no responde
+    (sandbox), devuelve al menos las condiciones de emisión.
+    """
     terms = ons_static.list_terms()
-    return {"ok": True, "count": len(terms), "ons": terms}
+    try:
+        byma = bymadata.negociable_obligations()
+        rows = byma.get("rows", []) if byma.get("ok") else []
+        if rows:
+            enriched = ons_static.enrich_with_terms(rows)
+            # Solo las que tienen condiciones cargadas (has_terms), con TIR si aplica
+            con_terms = [e for e in enriched if e.get("has_terms")]
+            if con_terms:
+                # Ordenar por TIR descendente (las que más rinden primero)
+                con_terms.sort(key=lambda e: (e.get("tir_pct") is None, -(e.get("tir_pct") or 0)))
+                return {"ok": True, "count": len(con_terms), "ons": con_terms, "source": "BYMA + condiciones"}
+    except Exception:
+        pass
+    # Fallback: solo condiciones de emisión (sin precio en vivo)
+    return {"ok": True, "count": len(terms), "ons": terms, "source": "condiciones (sin precio en vivo)"}
 
 
 @app.get("/api/inversiones/lecaps")

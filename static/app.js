@@ -2848,12 +2848,32 @@ function consultarSaldoDia(fechaISO) {
     </div>
     ${recomendacion}
     ${renderPagosDelDia(fechaISO)}`;
+
+  // Wiring: editar / eliminar movimientos del día
+  $$("#consulta-result .pd-editable").forEach(row => {
+    row.onclick = (e) => {
+      if (e.target.classList.contains("pd-del")) return;
+      openMovModal(parseInt(row.dataset.pdidx, 10));
+    };
+  });
+  $$("#consulta-result .pd-del").forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.pddel, 10);
+      const m = state.movements[idx];
+      if (!m) return;
+      if (!confirm(`¿Eliminar "${m.label || "este movimiento"}"?`)) return;
+      state.movements.splice(idx, 1);
+      project();
+      consultarSaldoDia(fechaISO); // refrescar la lista del día
+    };
+  });
 }
 
 // Lista de movimientos (cobros y pagos) que caen en una fecha
 function renderPagosDelDia(fechaISO) {
   const items = [];
-  state.movements.forEach((m) => {
+  state.movements.forEach((m, idx) => {
     if (!m.amount || !m.date) return;
     // Expandir recurrencia y ver si cae ese día
     const base = new Date(m.date + "T00:00:00");
@@ -2873,24 +2893,29 @@ function renderPagosDelDia(fechaISO) {
         g++;
       }
     }
-    if (cae) items.push(m);
+    if (cae) items.push({ m, idx });
   });
 
   if (!items.length) {
     return `<div class="pagos-dia"><h4>Movimientos de ese día</h4><p class="pd-empty">No hay cobros ni pagos programados para ese día.</p></div>`;
   }
 
-  const cobros = items.filter(m => m.amount > 0).sort((a,b)=>b.amount-a.amount);
-  const pagos = items.filter(m => m.amount < 0).sort((a,b)=>a.amount-b.amount);
-  const totalCobros = cobros.reduce((s,m)=>s+m.amount,0);
-  const totalPagos = pagos.reduce((s,m)=>s+Math.abs(m.amount),0);
+  const cobros = items.filter(x => x.m.amount > 0).sort((a,b)=>b.m.amount-a.m.amount);
+  const pagos = items.filter(x => x.m.amount < 0).sort((a,b)=>a.m.amount-b.m.amount);
+  const totalCobros = cobros.reduce((s,x)=>s+x.m.amount,0);
+  const totalPagos = pagos.reduce((s,x)=>s+Math.abs(x.m.amount),0);
 
-  const fila = (m) => {
+  const fila = (x) => {
+    const m = x.m;
     const ccy = movCurrency(m);
-    return `<div class="pd-item">
-      <span class="pd-label">${h(m.label||"(sin concepto)")}</span>
+    // Los movimientos de factura/inversión se gestionan en su módulo, no se borran sueltos
+    const propio = !m.compId && !m.invId && !m.impVto;
+    const recur = m.recurrence && m.recurrence !== "none";
+    return `<div class="pd-item ${propio?'pd-editable':''}" ${propio?`data-pdidx="${x.idx}"`:''}>
+      <span class="pd-label">${h(m.label||"(sin concepto)")}${recur?' <span class="pd-recur">repite</span>':''}</span>
       <span class="pd-acc">${h(accountName(m.account))}</span>
       <span class="pd-monto ${m.amount>0?'in':'out'}">${m.amount>0?'+':'−'}${moneyC(Math.abs(m.amount), ccy)}</span>
+      ${propio?`<button class="pd-del" data-pddel="${x.idx}" title="Eliminar este movimiento">×</button>`:'<span class="pd-lock" title="Se gestiona desde su módulo (factura/inversión)">🔒</span>'}
     </div>`;
   };
 
@@ -2902,6 +2927,7 @@ function renderPagosDelDia(fechaISO) {
       <span>Neto del día</span>
       <b class="${totalCobros-totalPagos>=0?'in':'out'}">${totalCobros-totalPagos>=0?'+':'−'}${moneyC(Math.abs(totalCobros-totalPagos),"ARS")}</b>
     </div>
+    <p class="pd-hint">Tocá un movimiento para editarlo, o la × para eliminarlo. Los 🔒 se gestionan desde su factura o inversión.</p>
   </div>`;
 }
 
@@ -3461,13 +3487,24 @@ async function renderInversiones() {
     const res = await fetch(url);
     const data = await res.json();
     items = data[key] || [];
+    _invSymbolItems = items; // guardar para mostrar la TIR al elegir
     const sel = $("#inv-symbol");
     if (!items.length && kind === "lecap") {
       sel.innerHTML = `<option value="">— sin LECAPs en vivo (requiere BYMA) —</option>`;
       return;
     }
-    sel.innerHTML = items.map((b) =>
-      `<option value="${b.symbol || b.ticker}">${b.symbol || b.ticker}${b.name ? " · "+b.name : b.tipo ? " · "+b.tipo : ""}</option>`).join("");
+    if (!items.length) {
+      sel.innerHTML = `<option value="">— sin instrumentos en vivo (requiere BYMA) —</option>`;
+      return;
+    }
+    sel.innerHTML = items.map((b) => {
+      const sym = b.symbol || b.ticker;
+      const tir = b.tir_pct != null ? ` · TIR ${num2g(b.tir_pct)}%` : (b.tna_pct != null ? ` · TNA ${num2g(b.tna_pct)}%` : "");
+      const nm = b.name ? " · "+b.name : b.tipo ? " · "+b.tipo : "";
+      return `<option value="${sym}">${sym}${nm}${tir}</option>`;
+    }).join("");
+    // Mostrar el resumen automático de la ON elegida (TIR, cupón, vencimiento)
+    mostrarResumenInstrumento();
   };
   await loadSymbols();
 
@@ -3725,9 +3762,53 @@ async function renderInversiones() {
     toggleControls();
     await loadSymbols();
   });
+  const symSel = $("#inv-symbol");
+  if (symSel) symSel.addEventListener("change", mostrarResumenInstrumento);
   $("#inv-sim-btn").addEventListener("click", runSim);
   // Simular FCI al abrir (es la opción por defecto)
   runFci();
+}
+
+// Items del último dropdown de instrumentos (bonos/ONs/lecaps con su TIR)
+let _invSymbolItems = [];
+// Muestra el resumen automático (TIR, cupón, vencimiento) de la ON/bono elegido,
+// sin necesidad de tocar "simular".
+function mostrarResumenInstrumento() {
+  const host = $("#inv-result");
+  if (!host) return;
+  const kind = $("#inv-kind")?.value;
+  if (kind === "fci" || kind === "caucion" || kind === "plazofijo") return;
+  const sym = $("#inv-symbol")?.value;
+  const it = _invSymbolItems.find(x => (x.symbol || x.ticker) === sym);
+  if (!it) return;
+
+  const tir = it.tir_pct != null ? num2g(it.tir_pct) + "%" : (it.tna_pct != null ? num2g(it.tna_pct) + "% (TNA)" : "—");
+  const cupon = it.coupon_pct != null ? num2g(it.coupon_pct) + "%" : "—";
+  const venc = it.maturity ? fmtDateAnio(it.maturity) : "—";
+  const precio = it.price != null ? num2g(it.price) : "—";
+  const dur = it.modified_duration != null ? num2g(it.modified_duration) + " años" : "—";
+  const amort = it.amortization_label || "—";
+  const moneda = (it.currency || "").toUpperCase().includes("US") ? "USD" : (it.currency || "ARS");
+
+  host.innerHTML = `
+    <div class="on-resumen">
+      <div class="on-resumen-head">
+        <div>
+          <h3>${h(sym)}${it.name ? " · "+h(it.name) : ""}</h3>
+          <span class="on-issuer">${h(it.issuer || it.tipo || "Obligación Negociable")}</span>
+        </div>
+        <div class="on-tir"><small>TIR (rendimiento)</small><b>${tir}</b></div>
+      </div>
+      <div class="on-datos">
+        <div><small>Precio</small><b>${precio}</b></div>
+        <div><small>Cupón anual</small><b>${cupon}</b></div>
+        <div><small>Vencimiento</small><b>${venc}</b></div>
+        <div><small>Duration</small><b>${dur}</b></div>
+        <div><small>Amortización</small><b>${amort}</b></div>
+        <div><small>Moneda</small><b>${moneda}</b></div>
+      </div>
+      <p class="on-hint">La TIR ya viene calculada con el precio en vivo de BYMA. Cargá un monto arriba y tocá "Simular" para ver el cronograma de cobros.</p>
+    </div>`;
 }
 
 const num = (v) => v == null ? "—" : new Intl.NumberFormat("es-AR", { maximumFractionDigits: 1 }).format(v);
@@ -5102,7 +5183,18 @@ function switchView(view) {
 
 // ── Init ─────────────────────────────────────────────────
 function init() {
-  if (loadState()) {
+  const demoParam = new URLSearchParams(location.search).get("demo");
+  if (demoParam === "consultorio" && typeof DEMO_CONSULTORIO !== "undefined") {
+    loadDemoDataset(DEMO_CONSULTORIO);
+  } else if (demoParam === "limpio") {
+    // Demo LIMPIO para cliente nuevo: cuentas típicas ya creadas, sin datos.
+    state.accounts = [
+      { id: "cc", name: "Cuenta corriente", banco: "Banco de la Nación Argentina", tipo: "cc", moneda: "ARS", alias: "", opening: 0 },
+      { id: "caja", name: "Efectivo", banco: "", tipo: "efectivo", moneda: "ARS", alias: "", opening: 0 },
+    ];
+    state.movements = [];
+    saveState();
+  } else if (loadState()) {
     // Estado restaurado desde el navegador: aplicar prefs al panel
     if ($("#buffer")) $("#buffer").value = state.prefs.colchon;
     if ($("#horizon")) $("#horizon").value = state.prefs.horizonte;

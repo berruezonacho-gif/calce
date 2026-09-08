@@ -1360,3 +1360,26 @@ input:focus, select:focus {
 .mmi-tag { font-size: 10px; font-weight: 700; color: #E65100; background: #FFE8CC; padding: 1px 7px; border-radius: 10px; margin-left: 4px; white-space: nowrap; }
 .mmi-confirm { width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--green); background: #fff; color: var(--green); font-size: 13px; cursor: pointer; flex-shrink: 0; line-height: 1; padding: 0; margin-right: 4px; }
 .mmi-confirm:hover { background: var(--green); color: #fff; }
+
+/* ═══ Resumen automático de ON / bono ═════════════════════ */
+.on-resumen { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; }
+.on-resumen-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line-2); }
+.on-resumen-head h3 { font-family: "Fraunces", serif; font-size: 18px; font-weight: 600; }
+.on-issuer { font-size: 12.5px; color: var(--slate-2); }
+.on-tir { text-align: right; }
+.on-tir small { display: block; font-size: 10.5px; color: var(--slate-2); text-transform: uppercase; letter-spacing: .04em; }
+.on-tir b { font-family: "Fraunces", serif; font-size: 26px; color: var(--green); }
+.on-datos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.on-datos div small { display: block; font-size: 11px; color: var(--slate-2); }
+.on-datos div b { font-family: var(--mono); font-size: 14.5px; color: var(--navy); }
+.on-hint { font-size: 11.5px; color: var(--slate-2); margin-top: 14px; line-height: 1.5; }
+
+/* Editar/eliminar movimientos desde el detalle del día */
+.pd-item { display: flex; align-items: center; gap: 10px; }
+.pd-editable { cursor: pointer; border-radius: 6px; padding: 2px 4px; margin: 0 -4px; transition: background .1s; }
+.pd-editable:hover { background: var(--paper); }
+.pd-recur { font-size: 9.5px; color: var(--slate-2); background: var(--paper); padding: 1px 6px; border-radius: 8px; }
+.pd-del { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); background: #fff; color: var(--slate-2); font-size: 13px; cursor: pointer; flex-shrink: 0; line-height: 1; padding: 0; }
+.pd-del:hover { color: var(--red); border-color: var(--red); }
+.pd-lock { font-size: 11px; opacity: .5; width: 20px; text-align: center; flex-shrink: 0; }
+.pd-hint { font-size: 10.5px; color: var(--slate-2); margin-top: 10px; }
