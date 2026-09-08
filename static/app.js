@@ -25,7 +25,7 @@ const state = {
     { id: "efectivo", name: "Caja / Efectivo", banco: "", tipo: "efectivo", moneda: "ARS", alias: "", opening: 300000 },
     { id: "banco", name: "Cuenta principal", banco: "Banco de la Nación Argentina", tipo: "cc", moneda: "ARS", alias: "", opening: 500000 },
   ],
-  empresa: { nombre: "", cuit: "", provincia: "" },
+  empresa: { nombre: "", cuit: "", provincia: "", modo: "completo" },
   prefs: { moneda: "ARS", formatoFecha: "dd/mm/aa", colchon: 200000, horizonte: 90 },
   impuestos: { iva: 21, iibb: 3 },
   result: null,
@@ -4204,21 +4204,17 @@ async function renderFCI() {
 // Genera los próximos vencimientos con monto estimado desde los movimientos.
 function proximosVencimientosImpositivos() {
   const hoy = new Date(); hoy.setHours(0,0,0,0);
-  // Montos: primero un override manual del usuario (state.impMontos), luego lo
-  // estimado desde los movimientos, luego un default.
+  // Montos: los carga el usuario (state.impMontos). Si no cargó nada para un
+  // impuesto, el monto queda null (se muestra el vencimiento sin importe, para
+  // que lo complete). NO inventamos montos ficticios.
   const overrides = state.impMontos || {};
-  const buscarMonto = (cat, kws, def) => {
-    if (overrides[cat] != null) return overrides[cat];
-    const m = state.movements.find(x => {
-      const t = (x.label||"").toLowerCase();
-      return x.amount < 0 && kws.some(k => t.includes(k));
-    });
-    return m ? Math.abs(m.amount) : def;
+  const buscarMonto = (cat) => {
+    return (overrides[cat] != null) ? overrides[cat] : null;
   };
-  const montoIVA = buscarMonto("iva", ["iva"], 4100000);
-  const montoIIBB = buscarMonto("iibb", ["iibb","ingresos brutos","arba"], 1500000);
-  const montoGanancias = buscarMonto("ganancias", ["ganancias"], 2200000);
-  const montoCargas = buscarMonto("cargas", ["cargas","suss","931"], 6200000);
+  const montoIVA = buscarMonto("iva");
+  const montoIIBB = buscarMonto("iibb");
+  const montoGanancias = buscarMonto("ganancias");
+  const montoCargas = buscarMonto("cargas");
 
   // Definición de impuestos y su día de vencimiento mensual (aprox.)
   const imp = state.impuestos || {};
@@ -4251,8 +4247,8 @@ function renderCalendarioImpuestos() {
   const host = $("#imp-calendario");
   if (!host) return;
   const vtos = proximosVencimientosImpositivos();
-  const total30 = vtos.filter(v => v.dias <= 30).reduce((s,v)=>s+v.monto,0);
-  const proximo = vtos[0];
+  const total30 = vtos.filter(v => v.dias <= 30 && v.monto != null).reduce((s,v)=>s+v.monto,0);
+  const cargados = vtos.filter(v => v.monto != null && v.dias <= 30).length;
 
   const catColor = { iva:"#4C8DFF", iibb:"#F5A623", cargas:"#E65100", ganancias:"#7B61FF" };
 
@@ -4261,11 +4257,11 @@ function renderCalendarioImpuestos() {
       <div class="imp-cal-head">
         <div>
           <h3>Calendario de vencimientos</h3>
-          <p>Los próximos impuestos a pagar. Podés llevarlos al flujo de caja.</p>
+          <p>Las fechas de vencimiento son fijas. <b>El monto lo cargás vos</b> (Calce no conoce tu declaración) — después lo llevás al flujo.</p>
         </div>
         <div class="imp-cal-kpi">
           <small>A pagar en 30 días</small>
-          <b>${money(total30)}</b>
+          <b>${cargados ? money(total30) : "—"}</b>
         </div>
       </div>
       <div class="imp-cal-list">
@@ -4280,20 +4276,21 @@ function renderCalendarioImpuestos() {
               <span class="ical-org" style="color:${catColor[v.cat]||'#64748B'}">${v.org} · ${v.dias===0?"vence hoy":`en ${v.dias} días`}</span>
             </div>
             <div class="ical-monto-edit">
-              <em>$</em><input type="number" class="ical-monto-input" data-cat="${v.cat}" value="${Math.round(v.monto)}" step="100000">
+              <em>$</em><input type="number" class="ical-monto-input" data-cat="${v.cat}" value="${v.monto != null ? Math.round(v.monto) : ''}" placeholder="cargá el monto" step="100000">
             </div>
           </div>`).join("")}
       </div>
-      <p class="ical-hint">Podés ajustar cualquier monto — se guarda automáticamente.</p>
-      <button class="btn-primary sm" id="imp-cal-tocashflow">Llevar estos vencimientos al flujo de caja →</button>
+      <p class="ical-hint">Cargá el importe de cada impuesto según tu declaración. Se guarda automáticamente.</p>
+      <button class="btn-primary sm" id="imp-cal-tocashflow">Llevar los cargados al flujo de caja →</button>
     </div>`;
 
-  // Editar montos → guardar override por categoría
+  // Editar montos → guardar override por categoría (vaciar = borrar el override)
   $$(".ical-monto-input").forEach(inp => {
     inp.onchange = () => {
       if (!state.impMontos) state.impMontos = {};
       const val = parseFloat(inp.value);
       if (val > 0) state.impMontos[inp.dataset.cat] = val;
+      else delete state.impMontos[inp.dataset.cat];
       saveState();
       renderCalendarioImpuestos();
     };
@@ -4301,8 +4298,8 @@ function renderCalendarioImpuestos() {
 
   $("#imp-cal-tocashflow").onclick = () => {
     let n = 0;
-    vtos.forEach(v => {
-      // Evitar duplicar: solo si no existe ya un movimiento imp. en esa fecha/concepto
+    // Solo los que tienen monto cargado
+    vtos.filter(v => v.monto != null && v.monto > 0).forEach(v => {
       const existe = state.movements.some(m => m.date === v.fecha && (m.label||"").includes(v.concepto.split(" ")[0]) && m.impVto);
       if (!existe) {
         state.movements.push({
@@ -4315,8 +4312,8 @@ function renderCalendarioImpuestos() {
       }
     });
     project();
-    alert(`${n} vencimiento${n!==1?"s":""} agregado${n!==1?"s":""} al flujo de caja.`);
-    switchView("flujo");
+    alert(n ? `${n} vencimiento${n!==1?"s":""} agregado${n!==1?"s":""} al flujo de caja.` : "Cargá primero el monto de algún impuesto.");
+    if (n) switchView("flujo");
   };
 }
 
@@ -4953,6 +4950,12 @@ function renderConfig() {
           <input type="text" id="cfg-emp-cuit" value="${h(state.empresa.cuit)}" placeholder="30-12345678-9"></label>
         <label class="field"><span>Provincia</span>
           <select id="cfg-emp-prov">${["","CABA","Buenos Aires","Córdoba","Santa Fe","Mendoza","Tucumán","Entre Ríos","Salta","Otra"].map(p=>`<option ${p===state.empresa.provincia?"selected":""}>${p||"Elegir…"}</option>`).join("")}</select></label>
+        <label class="field"><span>Modo de la aplicación</span>
+          <select id="cfg-emp-modo">
+            <option value="simple" ${state.empresa.modo==="simple"?"selected":""}>Simple — solo lo esencial (recomendado para negocios simples)</option>
+            <option value="completo" ${state.empresa.modo!=="simple"?"selected":""}>Completo — todas las secciones (inversiones avanzadas, contabilidad, conciliación)</option>
+          </select>
+          <small>El modo simple oculta bonos, divisas, contabilidad y conciliación. Podés cambiarlo cuando quieras.</small></label>
       </div>
       <button class="btn-primary sm cfg-save-btn" id="cfg-save-empresa">Guardar cambios</button>`;
   } else if (sec === "impuestos") {
@@ -5048,7 +5051,8 @@ function renderConfig() {
       state.empresa.nombre = $("#cfg-emp-nombre").value;
       state.empresa.cuit = $("#cfg-emp-cuit").value;
       state.empresa.provincia = $("#cfg-emp-prov").value;
-      saveState(); flashSaved();
+      state.empresa.modo = $("#cfg-emp-modo").value;
+      saveState(); aplicarModoEmpresa(); flashSaved();
     };
     return;
   }
@@ -5156,6 +5160,17 @@ function renderConfig() {
 
 // ── Navegación ───────────────────────────────────────────
 const INV_GROUP = ["inversiones", "excedente", "fci", "mercado"];
+
+// Modo simple: oculta las secciones avanzadas (marcadas con data-adv).
+// Un consultorio no necesita Bonos, Divisas, FCI detallado, Contabilidad ni
+// Conciliación — se muestran solo en modo "completo".
+function aplicarModoEmpresa() {
+  const simple = (state.empresa && state.empresa.modo === "simple");
+  document.querySelectorAll("[data-adv]").forEach(el => {
+    el.style.display = simple ? "none" : "";
+  });
+}
+
 function switchView(view) {
   $$(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.view === view));
   $$(".nav-sub").forEach((n) => n.classList.toggle("active", n.dataset.view === view));
@@ -5358,6 +5373,7 @@ function init() {
 
   project();
   renderDashboard();
+  aplicarModoEmpresa();
 }
 
 function monthDay(day) {

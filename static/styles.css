@@ -491,6 +491,8 @@ input:focus, select:focus {
 .imp-op-row .imp-fecha { grid-column: 1; font-size: 13px; }
 .imp-op-row .imp-medio { grid-column: 2; }
 .imp-op-row select, .imp-op-row input { font-size: 13px; padding: 7px 9px; }
+.imp-op-row .money-input input { padding-left: 24px; }
+.imp-op-row .money-input em { left: 9px; font-size: 12px; }
 .imp-op-row .imp-tipo { font-family: "Inter", sans-serif; }
 .imp-del {
   position: absolute; top: -7px; right: -7px; width: 20px; height: 20px;

@@ -3,7 +3,7 @@
 // profesionales que atienden y algunos insumos. Negocio simple, sin
 // complejidad de inversiones sofisticadas ni múltiples monedas.
 const DEMO_CONSULTORIO = {
-  empresa: { nombre: "Consultorio Kiné", cuit: "23-21465805-4", provincia: "Buenos Aires" },
+  empresa: { nombre: "Consultorio Kiné", cuit: "23-21465805-4", provincia: "Buenos Aires", modo: "simple" },
 
   accounts: [
     { id: "cc",   name: "Cuenta corriente",  banco: "Banco de la Nación Argentina", tipo: "cc", moneda: "ARS", alias: "consultorio.cc", opening: 6500000 },
