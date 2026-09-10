@@ -20,6 +20,7 @@ const state = {
   investments: [], // colocaciones (plazo fijo, FCI, USD, bonos, caución)
   comprobantes: [], // facturas a cobrar (AR) y a pagar (AP)
   proveedores: [], // directorio de proveedores
+  clientes: [], // directorio de clientes
   retenciones: [], // retenciones y percepciones sufridas (crédito fiscal)
   accounts: [
     { id: "efectivo", name: "Caja / Efectivo", banco: "", tipo: "efectivo", moneda: "ARS", alias: "", opening: 300000 },
@@ -216,6 +217,7 @@ function saveState() {
         investments: state.investments,
         comprobantes: state.comprobantes,
         proveedores: state.proveedores,
+        clientes: state.clientes,
         impMontos: state.impMontos,
         retenciones: state.retenciones,
         accounts: state.accounts,
@@ -238,6 +240,7 @@ function loadState() {
     if (s.investments) state.investments = s.investments;
     if (s.comprobantes) state.comprobantes = s.comprobantes;
     if (s.proveedores) state.proveedores = s.proveedores;
+    if (s.clientes) state.clientes = s.clientes;
     if (s.impMontos) state.impMontos = s.impMontos;
     if (s.retenciones) state.retenciones = s.retenciones;
     if (s.accounts) state.accounts = s.accounts;
@@ -1698,6 +1701,8 @@ function medioLabel(medio) {
 function wireExport() {
   const exp = $("#cf-export");
   if (exp) exp.onclick = exportCashflowCSV;
+  const fx = $("#cf-xlsx"); if (fx) fx.onclick = exportarFlujoExcel;
+  const fp = $("#cf-pdf"); if (fp) fp.onclick = exportarFlujoPDF;
 }
 
 function fmtDateFull(iso) {
@@ -1776,6 +1781,157 @@ function renderInsights() {
 }
 
 // ── Excedente (placeholder con datos del cash flow) ──────
+// ═══ RENDIMIENTO DEL EXCEDENTE INVERTIDO ═════════════════
+// Reporte de la ganancia devengada por las inversiones. Es la métrica
+// clave del pitch: "hacé rendir la plata que hoy tenés parada".
+let rendPeriodo = "anio"; // mes | anio | todo
+
+function rendRango() {
+  const hoy = new Date();
+  if (rendPeriodo === "mes") {
+    const from = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    const to = new Date(hoy.getFullYear(), hoy.getMonth()+1, 0);
+    return { from: from.toISOString().slice(0,10), to: to.toISOString().slice(0,10), label: hoy.toLocaleDateString("es-AR",{month:"long",year:"numeric"}) };
+  }
+  if (rendPeriodo === "anio") return { from: `${hoy.getFullYear()}-01-01`, to: `${hoy.getFullYear()}-12-31`, label: `Año ${hoy.getFullYear()}` };
+  return { from: "1900-01-01", to: "2100-12-31", label: "Todo el historial" };
+}
+
+// Rendimiento devengado de una inversión a una fecha (o al rescate/vencimiento).
+function rendimientoDevengado(inv, hastaISO) {
+  const monto = parseFloat(inv.monto) || 0;
+  const tasa = (parseFloat(inv.rendimiento) || 0) / 100;
+  const colocacion = new Date((inv.fechaColocacion || hastaISO) + "T00:00:00");
+  // Fin efectivo: mínimo entre (fecha del reporte), (vencimiento) y (fecha de rescate si rescatada)
+  let fin = new Date(hastaISO + "T00:00:00");
+  if (inv.fechaVenc) { const v = new Date(inv.fechaVenc+"T00:00:00"); if (v < fin) fin = v; }
+  if (inv.estado === "rescatada" && inv.fechaRescate) { const r = new Date(inv.fechaRescate+"T00:00:00"); if (r < fin) fin = r; }
+  // Si ya está rescatada y tenemos monto real, usar la diferencia real
+  if (inv.estado === "rescatada" && inv.montoRescate != null) {
+    return Math.max(0, (parseFloat(inv.montoRescate) || 0) - monto);
+  }
+  const dias = Math.max(0, Math.round((fin - colocacion) / 86400000));
+  return monto * tasa * (dias / 365);
+}
+
+function renderRendimiento() {
+  const wrap = $("#rend-wrap");
+  const { from, to, label } = rendRango();
+
+  // Inversiones ARS relevantes (activas + rescatadas en el período)
+  const invs = (state.investments || []).filter(inv => inv.moneda !== "USD");
+  const detalle = invs.map(inv => {
+    const rend = rendimientoDevengado(inv, to);
+    return { inv, rend };
+  }).filter(x => x.rend > 0 || x.inv.estado === "activa");
+  const totalRend = detalle.reduce((s,x) => s + x.rend, 0);
+  const totalColocadoHist = invs.reduce((s,inv) => s + (parseFloat(inv.monto)||0), 0);
+
+  wrap.innerHTML = `
+    <div class="mkt-head"><div class="eyebrow">Reportería</div>
+      <h2 class="inv-title">Rendimiento del excedente invertido</h2>
+      <p class="inv-sub">Cuánto generó tu plata por estar colocada en vez de quedar parada en la cuenta.</p></div>
+
+    <div class="conta-bar">
+      <div class="conta-periodo">
+        <button class="cper ${rendPeriodo==="mes"?"active":""}" data-rper="mes">Este mes</button>
+        <button class="cper ${rendPeriodo==="anio"?"active":""}" data-rper="anio">Este año</button>
+        <button class="cper ${rendPeriodo==="todo"?"active":""}" data-rper="todo">Todo</button>
+      </div>
+      <div class="rpt-btns"><button class="btn-ghost sm" id="rend-xlsx">↓ Excel</button><button class="btn-ghost sm" id="rend-pdf">↓ PDF</button></div>
+    </div>
+
+    <div class="rend-hero">
+      <div class="rend-hero-main">
+        <small>Generado por el excedente invertido · ${h(label)}</small>
+        <b>${money(totalRend)}</b>
+        <span>sobre ${money(totalColocadoHist)} colocados</span>
+      </div>
+    </div>
+
+    <div class="rend-msg">◆ Este es dinero que, sin colocarlo, habría quedado parado en la cuenta sin generar nada.</div>
+
+    <div class="table-card" style="margin-top:18px">
+      <div class="chart-head"><h2>Evolución del rendimiento acumulado</h2></div>
+      <div id="rend-chart"></div>
+    </div>
+
+    <div class="table-card" style="margin-top:16px">
+      <div class="chart-head"><h2>Detalle por inversión</h2></div>
+      ${detalle.length ? `<div class="cf-table-scroll"><table class="cf-table">
+        <thead><tr><th>Tipo</th><th>Instrumento</th><th>Monto</th><th>TNA</th><th>Colocación</th><th>Estado</th><th>Rendimiento</th></tr></thead>
+        <tbody>${detalle.sort((a,b)=>b.rend-a.rend).map(x => `<tr>
+          <td><span class="inv-tag inv-${x.inv.tipo}">${tipoInvLabel(x.inv.tipo)}</span></td>
+          <td>${h(x.inv.label||"")}</td>
+          <td class="mono">${moneyC(x.inv.monto,"ARS")}</td>
+          <td class="mono">${x.inv.rendimiento?num2g(x.inv.rendimiento)+"%":"—"}</td>
+          <td>${x.inv.fechaColocacion?fmtDateShort(x.inv.fechaColocacion):"—"}</td>
+          <td>${x.inv.estado==="rescatada"?'<span class="muted">Rescatada</span>':'<span class="in">Activa</span>'}</td>
+          <td class="mono in">+${moneyC(x.rend,"ARS")}</td>
+        </tr>`).join("")}</tbody>
+      </table></div>` : `<p class="cf-empty">Todavía no tenés inversiones colocadas. Colocá tu excedente para ver cuánto rinde.</p>`}
+    </div>`;
+
+  $$("[data-rper]").forEach(b => b.onclick = () => { rendPeriodo = b.dataset.rper; renderRendimiento(); });
+  const xb = $("#rend-xlsx"); if (xb) xb.onclick = () => exportarRendimientoExcel(detalle, label, to);
+  const pb = $("#rend-pdf"); if (pb) pb.onclick = () => exportarRendimientoPDF(detalle, label, to);
+
+  renderRendChart(invs, from, to);
+}
+
+// Gráfico de línea: rendimiento acumulado día por día en el período.
+function renderRendChart(invs, from, to) {
+  const host = $("#rend-chart");
+  if (!host) return;
+  if (!invs.length) { host.innerHTML = `<p class="cf-empty" style="padding:20px">Sin datos para graficar.</p>`; return; }
+  // Rango del gráfico: desde la colocación más antigua (o 'from') hasta hoy/'to'
+  const hoy = new Date().toISOString().slice(0,10);
+  const finISO = to < hoy ? to : hoy;
+  let iniISO = from;
+  invs.forEach(inv => { if (inv.fechaColocacion && inv.fechaColocacion < iniISO) iniISO = inv.fechaColocacion; });
+  // Limitar a un rango razonable
+  const ini = new Date(iniISO+"T00:00:00"), fin = new Date(finISO+"T00:00:00");
+  const totalDias = Math.max(1, Math.round((fin-ini)/86400000));
+  const step = totalDias > 180 ? Math.ceil(totalDias/180) : 1;
+  const pts = [];
+  for (let d = 0; d <= totalDias; d += step) {
+    const fecha = new Date(ini); fecha.setDate(fecha.getDate()+d);
+    const fISO = fecha.toISOString().slice(0,10);
+    const acum = invs.reduce((s,inv) => s + rendimientoDevengado(inv, fISO), 0);
+    pts.push({ x: d, y: acum });
+  }
+  if (pts.length < 2) { host.innerHTML = `<p class="cf-empty" style="padding:20px">Poco historial para graficar todavía.</p>`; return; }
+
+  const W=880, H=240, P={t:16,r:16,b:26,l:70};
+  const iw=W-P.l-P.r, ih=H-P.t-P.b;
+  const ymax = Math.max(...pts.map(p=>p.y), 1);
+  const X=(i)=>P.l+(i/(pts.length-1))*iw;
+  const Y=(v)=>P.t+ih-(v/ymax)*ih;
+  const line = pts.map((p,i)=>`${X(i).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ");
+  const area = `${P.l},${(P.t+ih).toFixed(1)} ${line} ${(P.l+iw).toFixed(1)},${(P.t+ih).toFixed(1)}`;
+
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="dash-svg">
+    <polygon points="${area}" fill="rgba(46,125,50,.10)"/>
+    <polyline points="${line}" fill="none" stroke="#2E7D32" stroke-width="2.5"/>
+    <text x="6" y="${Y(ymax).toFixed(1)+4}" fill="#94A3B8" font-size="10">${money(ymax)}</text>
+    <text x="6" y="${(P.t+ih).toFixed(1)}" fill="#94A3B8" font-size="10">$0</text>
+    <text x="${P.l}" y="${H-6}" fill="#94A3B8" font-size="10">${fmtDateShort(iniISO)}</text>
+    <text x="${(P.l+iw).toFixed(1)}" y="${H-6}" fill="#94A3B8" font-size="10" text-anchor="end">${fmtDateShort(finISO)}</text>
+  </svg>`;
+}
+
+function exportarRendimiento(detalle, label, to) {
+  const rows = [["Tipo","Instrumento","Monto colocado","TNA %","Fecha colocación","Estado","Rendimiento devengado"]];
+  detalle.forEach(x => rows.push([
+    tipoInvLabel(x.inv.tipo), x.inv.label||"", (parseFloat(x.inv.monto)||0).toFixed(2),
+    x.inv.rendimiento||"", x.inv.fechaColocacion||"", x.inv.estado||"", x.rend.toFixed(2),
+  ]));
+  const total = detalle.reduce((s,x)=>s+x.rend,0);
+  rows.push(["","","","","","TOTAL", total.toFixed(2)]);
+  descargarCSV(rows, `rendimiento_excedente_${label.replace(/\s+/g,"_")}.csv`);
+}
+
+
 async function renderExcedente() {
   // El excedente es la liquidez que te sobra después de cubrir los pagos
   // próximos. El optimizador (renderOptimizar) hace ese cálculo por cuenta.
@@ -2465,6 +2621,7 @@ function saveProvFromModal() {
 function renderComprobantes() {
   const wrap = $("#comp-wrap");
   if (compTab === "proveedores") return renderProveedores(wrap);
+  if (compTab === "clientes") return renderClientes(wrap);
   const tipo = compTab;
   const esCobrar = tipo === "cobrar";
   const comps = state.comprobantes.filter(c => c.tipo === tipo);
@@ -2523,6 +2680,7 @@ function renderComprobantes() {
     <div class="comp-tabs">
       <button class="comp-tab ${esCobrar?"active":""}" data-tab="cobrar">Por cobrar</button>
       <button class="comp-tab ${!esCobrar?"active":""}" data-tab="pagar">Por pagar</button>
+      <button class="comp-tab" data-tab="clientes">Clientes</button>
       <button class="comp-tab" data-tab="proveedores">Proveedores</button>
     </div>
 
@@ -2556,11 +2714,11 @@ function renderComprobantes() {
   $("#comp-add").onclick = () => openCompModal(compTab);
   $$(".comp-saldar-btn").forEach(b => b.onclick = () => saldarComprobante(b.dataset.saldar));
   $$(".comp-del-btn").forEach(b => b.onclick = () => eliminarComprobante(b.dataset.del));
-  // Import de AFIP (Libro IVA Compras)
+  // Import de AFIP: contextual — Por cobrar → Libro IVA Ventas; Por pagar → Compras
   const afipBtn = $("#afip-import-btn");
   if (afipBtn) {
     afipBtn.onclick = () => $("#afip-file").click();
-    $("#afip-file").onchange = (e) => importarAfip(e);
+    $("#afip-file").onchange = (e) => (compTab === "cobrar" ? importarAfipVentas(e) : importarAfip(e));
   }
 }
 
@@ -2629,6 +2787,8 @@ function openAfipModal(data) {
   $("#afip-imp-comp").onchange = (ev) => {
     $("#afip-comp-warn").style.display = ev.target.checked ? "" : "none";
   };
+  const cb = $("#afip-modal-confirm"); if (cb) cb.onclick = confirmarAfip;
+  const t = $("#afip-modal-title"); if (t) t.textContent = "Importar compras de AFIP";
   $("#afip-modal").classList.remove("hidden");
 }
 function closeAfipModal() { $("#afip-modal").classList.add("hidden"); _afipData = null; }
@@ -2685,6 +2845,227 @@ function confirmarAfip() {
   if (nProv) msg.push(`${nProv} proveedores`);
   if (nComp) msg.push(`${nComp} facturas`);
   alert(msg.length ? `Importado de AFIP: ${msg.join(" y ")}.` : "No se importó nada (elegí al menos una opción).");
+}
+
+
+// ── Import del Libro IVA Ventas de AFIP ───────────────────
+let _afipVentasData = null;
+async function importarAfipVentas(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const btn = $("#afip-import-btn");
+  const orig = btn.textContent;
+  btn.textContent = "Leyendo…";
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/afip/libro-iva-ventas", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!data.ok) { alert(data.error || "No se pudo leer el archivo de AFIP."); return; }
+    _afipVentasData = data;
+    openAfipVentasModal(data);
+  } catch {
+    alert("Error al leer el archivo. Verificá que sea el Libro IVA Ventas de AFIP en Excel.");
+  } finally {
+    btn.textContent = orig;
+    e.target.value = "";
+  }
+}
+
+function openAfipVentasModal(data) {
+  const r = data.resumen;
+  const body = $("#afip-modal-body");
+  const cuitsExistentes = new Set(state.clientes.map(c => (c.cuit||"").replace(/\D/g,"")));
+  const cliNuevos = data.clientes.filter(c => !cuitsExistentes.has(c.cuit));
+
+  $("#afip-modal-title").textContent = "Importar ventas de AFIP";
+  body.innerHTML = `
+    <p class="afip-intro">Leímos tu <b>Libro IVA Ventas</b> (hoja "${h(r.sheet)}"). Esto es lo que encontramos:</p>
+    <div class="afip-kpis">
+      <div class="afip-kpi"><b>${r.clientes}</b><small>clientes</small><span>${cliNuevos.length} nuevos</span></div>
+      <div class="afip-kpi"><b>${r.comprobantes}</b><small>facturas de venta</small></div>
+      <div class="afip-kpi"><b>${money(r.total_iva)}</b><small>IVA débito fiscal</small></div>
+      <div class="afip-kpi"><b>${money(r.total)}</b><small>total facturado</small></div>
+    </div>
+
+    <div class="afip-choices">
+      <label class="afip-choice">
+        <input type="checkbox" id="afip-imp-cli" ${cliNuevos.length?"checked":""} ${cliNuevos.length?"":"disabled"}>
+        <span><b>Cargar ${cliNuevos.length} clientes nuevos</b> al directorio (CUIT + razón social)${cliNuevos.length?"":" — ya los tenés todos"}</span>
+      </label>
+      <label class="afip-choice">
+        <input type="checkbox" id="afip-imp-vcomp">
+        <span><b>Cargar las ${r.comprobantes} facturas</b> como cuentas por cobrar (con IVA discriminado)</span>
+      </label>
+    </div>
+
+    <details class="afip-preview">
+      <summary>Ver los primeros clientes</summary>
+      <table class="afip-table">
+        <thead><tr><th>CUIT</th><th>Cliente</th><th>Comp.</th><th>Total</th></tr></thead>
+        <tbody>${data.clientes.slice(0,15).map(c => `<tr>
+          <td class="mono">${h(c.cuitFmt)}</td><td>${h(c.nombre)}</td>
+          <td>${c.comprobantes}</td><td class="mono">${money(c.total)}</td></tr>`).join("")}</tbody>
+      </table>
+    </details>`;
+
+  // Reusar el mismo modal, pero con el confirm de ventas
+  const confirmBtn = $("#afip-modal-confirm");
+  confirmBtn.onclick = confirmarAfipVentas;
+  $("#afip-modal").classList.remove("hidden");
+}
+
+function confirmarAfipVentas() {
+  if (!_afipVentasData) return;
+  const impCli = $("#afip-imp-cli")?.checked;
+  const impComp = $("#afip-imp-vcomp")?.checked;
+  let nCli = 0, nComp = 0;
+
+  if (impCli) {
+    const cuitsExistentes = new Set(state.clientes.map(c => (c.cuit||"").replace(/\D/g,"")));
+    _afipVentasData.clientes.forEach(c => {
+      if (cuitsExistentes.has(c.cuit)) return;
+      state.clientes.push({
+        id: "cli" + Math.random().toString(36).slice(2,8),
+        nombre: c.nombre, cuit: c.cuitFmt, rubro: "", contacto: "",
+        email: "", telefono: "", cbu: "",
+        condicionIVA: "Responsable Inscripto", plazoPago: 30,
+      });
+      nCli++;
+    });
+  }
+
+  if (impComp) {
+    const cuentaDefault = state.accounts.find(a => a.moneda === "ARS" && a.tipo !== "efectivo" && a.tipo !== "comitente")?.id
+      || state.accounts[0]?.id;
+    _afipVentasData.comprobantes.forEach(c => {
+      const venc = c.emision ? addDaysToISO(c.emision, 30) : new Date().toISOString().slice(0,10);
+      const comp = {
+        id: compId(), tipo: "cobrar", contraparte: c.contraparte,
+        cuit: c.cuit, numero: c.numero, tipoComprobante: c.tipoComprobante,
+        monto: c.monto, moneda: c.moneda,
+        account: cuentaDefault,
+        emision: c.emision || new Date().toISOString().slice(0,10),
+        vencimiento: venc,
+        categoria: "ventas", estado: "pendiente",
+        neto: c.neto, noGravado: c.noGravado, exento: c.exento, iva: c.iva,
+        origen: "afip",
+      };
+      state.comprobantes.push(comp);
+      generarMovComprobante(comp);
+      nComp++;
+    });
+  }
+
+  closeAfipModal();
+  // Restaurar el confirm del modal a compras por defecto
+  const confirmBtn = $("#afip-modal-confirm");
+  if (confirmBtn) confirmBtn.onclick = confirmarAfip;
+  $("#afip-modal-title").textContent = "Importar de AFIP";
+  saveState();
+  if (impComp) project();
+  compTab = "cobrar";
+  renderComprobantes();
+  let msg = [];
+  if (nCli) msg.push(`${nCli} clientes`);
+  if (nComp) msg.push(`${nComp} facturas`);
+  alert(msg.length ? `Importado de AFIP: ${msg.join(" y ")}.` : "No se importó nada (elegí al menos una opción).");
+}
+
+// ── Directorio de clientes ────────────────────────────────
+function renderClientes(wrap) {
+  const clis = state.clientes || [];
+  const filaCli = (c) => `<tr class="prov-row" data-id="${c.id}">
+    <td class="prov-name"><b>${h(c.nombre)}</b><small>${h(c.rubro||"")}</small></td>
+    <td class="mono">${h(c.cuit||"—")}</td>
+    <td>${h(c.contacto||"—")}<br><small class="muted">${h(c.email||"")}</small></td>
+    <td>${h(c.telefono||"—")}</td>
+    <td><span class="prov-iva">${h(c.condicionIVA||"—")}</span></td>
+    <td class="mono">${c.plazoPago? c.plazoPago+" días":"—"}</td>
+    <td class="prov-actions">
+      <button class="cli-edit-btn" data-edit="${c.id}" title="Editar">✎</button>
+      <button class="cli-del-btn" data-del="${c.id}" title="Eliminar">×</button>
+    </td>
+  </tr>`;
+
+  wrap.innerHTML = `
+    <div class="inv-head">
+      <div>
+        <div class="eyebrow">Tesorería</div>
+        <h2 class="inv-title">Cobranzas y Pagos</h2>
+        <p class="inv-sub">Administrá tus facturas por cobrar y por pagar, con vencimientos y antigüedad de deuda. Todo lo pendiente ya se refleja en tu flujo de caja proyectado.</p>
+      </div>
+      <div class="comp-head-actions">
+        <button class="btn-ghost" id="afip-cli-import-btn">↑ Importar de AFIP</button>
+        <button class="btn-primary" id="cli-add">+ Nuevo cliente</button>
+      </div>
+    </div>
+    <input type="file" id="afip-file" accept=".xlsx,.xlsm" style="display:none">
+
+    <div class="comp-tabs">
+      <button class="comp-tab" data-tab="cobrar">Por cobrar</button>
+      <button class="comp-tab" data-tab="pagar">Por pagar</button>
+      <button class="comp-tab active" data-tab="clientes">Clientes</button>
+      <button class="comp-tab" data-tab="proveedores">Proveedores</button>
+    </div>
+
+    <div class="table-card">
+      <div class="chart-head"><h2>Directorio de clientes</h2><span class="muted">${clis.length} cliente${clis.length!==1?"s":""}</span></div>
+      ${clis.length ? `<div class="cf-table-scroll"><table class="cf-table">
+        <thead><tr><th>Cliente</th><th>CUIT</th><th>Contacto</th><th>Teléfono</th><th>Cond. IVA</th><th>Plazo</th><th></th></tr></thead>
+        <tbody>${clis.map(filaCli).join("")}</tbody>
+      </table></div>` : `<p class="cf-empty">Todavía no cargaste clientes. Importá tu Libro IVA Ventas de AFIP o cargá uno manual.</p>`}
+    </div>`;
+
+  $$(".comp-tab").forEach(b => b.onclick = () => { compTab = b.dataset.tab; renderComprobantes(); });
+  $("#cli-add").onclick = () => openCliModal();
+  $$(".cli-edit-btn").forEach(b => b.onclick = () => openCliModal(b.dataset.edit));
+  $$(".cli-del-btn").forEach(b => b.onclick = () => {
+    if (!confirm("¿Eliminar este cliente del directorio?")) return;
+    state.clientes = state.clientes.filter(c => c.id !== b.dataset.del);
+    saveState(); renderComprobantes();
+  });
+  const afipBtn = $("#afip-cli-import-btn");
+  if (afipBtn) { afipBtn.onclick = () => $("#afip-file").click(); $("#afip-file").onchange = (e) => importarAfipVentas(e); }
+}
+
+// Modal de cliente (reutiliza el de proveedor con otro título)
+let cliEditId = null;
+function openCliModal(id) {
+  cliEditId = id || null;
+  const c = id ? state.clientes.find(x=>x.id===id) : {};
+  $("#prov-modal-title").textContent = id ? "Editar cliente" : "Nuevo cliente";
+  $("#p-nombre").value = c?.nombre || "";
+  $("#p-cuit").value = c?.cuit || "";
+  $("#p-rubro").value = c?.rubro || "";
+  $("#p-contacto").value = c?.contacto || "";
+  $("#p-email").value = c?.email || "";
+  $("#p-telefono").value = c?.telefono || "";
+  $("#p-cbu").value = c?.cbu || "";
+  $("#p-plazo").value = c?.plazoPago || "";
+  const sel = $("#p-iva");
+  sel.innerHTML = CONDICIONES_IVA.map(x=>`<option value="${x}" ${c?.condicionIVA===x?"selected":""}>${x}</option>`).join("");
+  // El botón guardar del modal apunta a guardar cliente
+  $("#prov-modal-save").onclick = saveCliFromModal;
+  $("#prov-modal").classList.remove("hidden");
+  setTimeout(()=>$("#p-nombre").focus(), 50);
+}
+function saveCliFromModal() {
+  const nombre = $("#p-nombre").value.trim();
+  if (!nombre) { alert("Ingresá el nombre del cliente."); return; }
+  const data = {
+    nombre, cuit: $("#p-cuit").value.trim(), rubro: $("#p-rubro").value.trim(),
+    contacto: $("#p-contacto").value.trim(), email: $("#p-email").value.trim(),
+    telefono: $("#p-telefono").value.trim(), cbu: $("#p-cbu").value.trim(),
+    condicionIVA: $("#p-iva").value, plazoPago: parseInt($("#p-plazo").value) || null,
+  };
+  if (cliEditId) { const c = state.clientes.find(x=>x.id===cliEditId); Object.assign(c, data); }
+  else state.clientes.push({ ...data, id: "cli" + Math.random().toString(36).slice(2,8) });
+  saveState();
+  $("#prov-modal").classList.add("hidden");
+  // Restaurar el guardar del modal a proveedor
+  $("#prov-modal-save").onclick = saveProvFromModal;
+  renderComprobantes();
 }
 
 let compModalTipo = "cobrar";
@@ -4679,13 +5060,13 @@ function renderEstadoResultados(from, to, label) {
           <tr class="er-neto ${resultadoNeto>=0?'pos':'neg'}"><td>RESULTADO NETO ${resultadoNeto>=0?"(Ganancia)":"(Pérdida)"}</td><td class="mono">${money(resultadoNeto)}</td></tr>
         </tbody>
       </table>
-      <button class="btn-ghost sm conta-export" id="er-export">↓ Descargar (CSV)</button>` :
+      <div class="rpt-btns"><button class="btn-ghost sm" id="er-xlsx">↓ Excel</button><button class="btn-ghost sm" id="er-pdf">↓ PDF</button></div>` :
       `<p class="cf-empty">No hay operaciones devengadas en ${h(label)}. Cargá facturas o movimientos para ver el resultado.</p>`}
     </div>
     <p class="conta-note">Devengado: las ventas y gastos se cuentan por la fecha de la factura, aunque el cobro o pago ocurra en otro momento. El IVA no forma parte del resultado (es un pasivo/crédito, no un ingreso ni un gasto).</p>`;
 
-  const exp = $("#er-export");
-  if (exp) exp.onclick = () => exportarEstadoResultados(acum, label);
+  const exX = $("#er-xlsx"); if (exX) exX.onclick = () => exportarEstadoResultadosXlsx(acum, label);
+  const exP = $("#er-pdf"); if (exP) exP.onclick = () => exportarEstadoResultadosPdf(acum, label);
 }
 
 function renderSumasSaldos(from, to, label) {
@@ -4742,12 +5123,12 @@ function renderSumasSaldos(from, to, label) {
           </tbody>
         </table>
       </div>
-      <button class="btn-ghost sm conta-export" id="ss-export">↓ Descargar (CSV)</button>
+      <div class="rpt-btns"><button class="btn-ghost sm" id="ss-xlsx">↓ Excel</button><button class="btn-ghost sm" id="ss-pdf">↓ PDF</button></div>
     </div>
     <p class="conta-note">Sumas y saldos simplificado: activos y pasivos por su saldo actual, más las cuentas de resultado del período. Es una vista de gestión, no un balance legal — validá con tu contador.</p>`;
 
-  const exp = $("#ss-export");
-  if (exp) exp.onclick = () => exportarSumasSaldos(cuentas, label);
+  const ssX = $("#ss-xlsx"); if (ssX) ssX.onclick = () => exportarSumasSaldosXlsx(cuentas, label);
+  const ssP = $("#ss-pdf"); if (ssP) ssP.onclick = () => exportarSumasSaldosPdf(cuentas, label);
 }
 
 function exportarEstadoResultados(acum, label) {
@@ -5077,6 +5458,10 @@ function renderConfig() {
             <option value="completo" ${state.empresa.modo!=="simple"?"selected":""}>Completo — todas las secciones (inversiones avanzadas, contabilidad, conciliación)</option>
           </select>
           <small>El modo simple oculta bonos, divisas, contabilidad y conciliación. Podés cambiarlo cuando quieras.</small></label>
+        <label class="field"><span>Logo de la empresa (aparece en los PDF)</span>
+          <input type="file" id="cfg-emp-logo" accept="image/png,image/jpeg">
+          <div id="cfg-logo-preview" style="margin-top:8px">${state.empresa.logo?`<img src="${state.empresa.logo}" style="max-height:48px;border:1px solid var(--line);border-radius:6px;padding:4px;background:#fff"> <button class="btn-ghost sm" id="cfg-logo-del" type="button">Quitar</button>`:'<small class="muted">Sin logo cargado — los PDF salen solo con el nombre.</small>'}</div>
+        </label>
       </div>
       <button class="btn-primary sm cfg-save-btn" id="cfg-save-empresa">Guardar cambios</button>`;
   } else if (sec === "impuestos") {
@@ -5168,6 +5553,28 @@ function renderConfig() {
     return;
   }
   if (sec === "empresa") {
+    const logoInput = $("#cfg-emp-logo");
+    if (logoInput) logoInput.onchange = (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          const maxW = 200, maxH = 80;
+          let w = img.width, h = img.height;
+          const ratio = Math.min(maxW/w, maxH/h, 1);
+          w = Math.round(w*ratio); h = Math.round(h*ratio);
+          const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+          cv.getContext("2d").drawImage(img, 0, 0, w, h);
+          state.empresa.logo = cv.toDataURL("image/png");
+          saveState(); renderConfig();
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    };
+    const logoDel = $("#cfg-logo-del");
+    if (logoDel) logoDel.onclick = () => { delete state.empresa.logo; saveState(); renderConfig(); };
     $("#cfg-save-empresa").onclick = () => {
       state.empresa.nombre = $("#cfg-emp-nombre").value;
       state.empresa.cuit = $("#cfg-emp-cuit").value;
@@ -5307,6 +5714,7 @@ function switchView(view) {
   if (view === "saldos") renderSaldos();
   if (view === "comprobantes") renderComprobantes();
   if (view === "cartera") renderCartera();
+  if (view === "rendimiento") renderRendimiento();
   if (view === "inversiones") renderInversiones();
   if (view === "divisas") renderDivisas();
   if (view === "mercado") renderMercado();

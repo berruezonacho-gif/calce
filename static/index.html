@@ -29,6 +29,7 @@
         <div class="nav-menu">
           <button class="nav-sub" data-view="cartera">Mis inversiones</button>
           <button class="nav-sub" data-view="excedente">Invertir excedente</button>
+          <button class="nav-sub" data-view="rendimiento">Rendimiento</button>
           <button class="nav-sub" data-view="inversiones" data-adv>Simulador</button>
           <button class="nav-sub" data-view="divisas" data-adv>Dólar (comprar/vender)</button>
           <button class="nav-sub" data-view="fci" data-adv>FCI</button>
@@ -87,6 +88,8 @@
             <div class="chart-head cf-header">
               <h2>Flujo de caja</h2>
               <button class="cf-link" id="cf-export">↓ CSV</button>
+              <button class="cf-link" id="cf-xlsx">↓ Excel</button>
+              <button class="cf-link" id="cf-pdf">↓ PDF</button>
             </div>
             <!-- Barra de período -->
             <div class="cf-period-bar">
@@ -139,6 +142,11 @@
     <!-- Vista Excedente -->
     <section class="view hidden" id="view-excedente">
       <div class="excedente-wrap" id="excedente-wrap"></div>
+    </section>
+
+    <!-- Vista Rendimiento del excedente invertido -->
+    <section class="view hidden" id="view-rendimiento">
+      <div class="rend-wrap" id="rend-wrap"></div>
     </section>
 
     <!-- Vista Inversiones -->
@@ -439,7 +447,7 @@
   <div class="modal-overlay hidden" id="afip-modal">
     <div class="modal modal-wide">
       <div class="modal-header">
-        <h3>Importar de AFIP</h3>
+        <h3 id="afip-modal-title">Importar de AFIP</h3>
         <button class="modal-close" id="afip-modal-close">×</button>
       </div>
       <div class="modal-body" id="afip-modal-body"></div>
@@ -502,8 +510,12 @@
 
   <div class="save-indicator" id="save-indicator">✓ Guardado</div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script src="/static/bancos.js?v=1"></script>
   <script src="/static/demo_consultorio.js?v=1"></script>
+  <script src="/static/reportes.js?v=1"></script>
   <script src="/static/app.js?v=1"></script>
 </body>
 </html>

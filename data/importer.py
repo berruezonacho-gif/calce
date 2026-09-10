@@ -240,6 +240,10 @@ _LIVA_EXENTO  = {"exento", "op exentas", "operaciones exentas", "importe exento"
 _LIVA_IVA     = {"iva", "importe iva", "total iva", "iva liquidado"}
 _LIVA_TOTAL   = {"total", "importe total", "total comprobante", "imp total"}
 
+# Para el Libro IVA VENTAS: el CUIT/denominación son del COMPRADOR/RECEPTOR
+_LIVA_NRODOC_V = {"nro doc receptor", "nro doc comprador", "nro doc", "cuit", "cuit comprador", "cuit receptor"}
+_LIVA_DENOM_V  = {"denominacion receptor", "denominacion comprador", "denominacion", "razon social", "receptor", "comprador", "cliente"}
+
 
 def _norm_liva(s: str) -> str:
     """Normaliza headers del Libro IVA: minúscula, sin acentos, sin puntos,
@@ -268,10 +272,12 @@ def _liva_find_col(headers_norm: list[str], names: set) -> int | None:
     return None
 
 
-def _liva_best_sheet(content: bytes):
+def _liva_best_sheet(content: bytes, use_ventas: bool = False):
     """Elige la hoja que tenga las columnas del Libro IVA (fecha + CUIT + neto/IVA)."""
     from openpyxl import load_workbook
     wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    nrodoc_set = _LIVA_NRODOC_V if use_ventas else _LIVA_NRODOC
+    denom_set = _LIVA_DENOM_V if use_ventas else _LIVA_DENOM
     best = None
     best_score = -1
     for ws in wb.worksheets:
@@ -286,7 +292,7 @@ def _liva_best_sheet(content: bytes):
         for hi in range(min(8, len(rows))):
             hdr = [_norm_liva(str(c)) if c is not None else "" for c in rows[hi]]
             score = 0
-            for names in (_LIVA_FECHA, _LIVA_NRODOC, _LIVA_DENOM, _LIVA_NETO, _LIVA_IVA, _LIVA_TOTAL):
+            for names in (_LIVA_FECHA, nrodoc_set, denom_set, _LIVA_NETO, _LIVA_IVA, _LIVA_TOTAL):
                 if _liva_find_col(hdr, names) is not None:
                     score += 1
             if score > best_score:
@@ -571,5 +577,132 @@ def parse_retenciones(content: bytes, filename: str = "") -> dict:
             "total_retenciones": round(tot_ret, 2),
             "total_percepciones": round(tot_per, 2),
             "total": round(tot_ret + tot_per, 2),
+        },
+    }
+
+
+def parse_libro_iva_ventas(content: bytes, filename: str = "") -> dict:
+    """Parsea el Libro IVA Ventas de AFIP ("Mis Comprobantes Emitidos").
+
+    Espejo de parse_libro_iva() pero del lado de ventas: el CUIT/denominación
+    son del COMPRADOR (receptor). Devuelve clientes únicos y comprobantes a
+    cobrar con IVA débito fiscal discriminado.
+    """
+    if not (filename.lower().endswith((".xlsx", ".xlsm"))):
+        return {"ok": False, "error": "El Libro IVA Ventas de AFIP tiene que ser un Excel (.xlsx)."}
+
+    try:
+        sheet = _liva_best_sheet(content, use_ventas=True)
+    except Exception as e:
+        return {"ok": False, "error": f"No se pudo leer el Excel: {e}"}
+    if not sheet:
+        return {"ok": False, "error": "No reconocí el formato del Libro IVA Ventas. Verificá que sea el export de AFIP con columnas de cliente e IVA."}
+
+    rows = sheet["rows"]
+    hi = sheet["header_row"]
+    headers_norm = [_norm_liva(str(c)) if c is not None else "" for c in rows[hi]]
+
+    col = {
+        "fecha":   _liva_find_col(headers_norm, _LIVA_FECHA),
+        "tipo":    _liva_find_col(headers_norm, _LIVA_TIPO),
+        "ptovta":  _liva_find_col(headers_norm, _LIVA_PTOVTA),
+        "nrodesde":_liva_find_col(headers_norm, _LIVA_NRODESDE),
+        "cuit":    _liva_find_col(headers_norm, _LIVA_NRODOC_V),
+        "denom":   _liva_find_col(headers_norm, _LIVA_DENOM_V),
+        "moneda":  _liva_find_col(headers_norm, _LIVA_MONEDA),
+        "neto":    _liva_find_col(headers_norm, _LIVA_NETO),
+        "nograv":  _liva_find_col(headers_norm, _LIVA_NOGRAV),
+        "exento":  _liva_find_col(headers_norm, _LIVA_EXENTO),
+        "iva":     _liva_find_col(headers_norm, _LIVA_IVA),
+        "total":   _liva_find_col(headers_norm, _LIVA_TOTAL),
+    }
+    if col["cuit"] is None or col["denom"] is None:
+        return {"ok": False, "error": "No encontré las columnas de CUIT y cliente en el Libro IVA Ventas."}
+
+    def cell(row, key):
+        i = col[key]
+        return row[i] if (i is not None and i < len(row)) else None
+
+    clientes = {}
+    comprobantes = []
+    skipped = 0
+
+    for row in rows[hi + 1:]:
+        if not row or all(c is None for c in row):
+            continue
+        cuit = _parse_cuit(cell(row, "cuit"))
+        denom = cell(row, "denom")
+        if not cuit or not denom:
+            skipped += 1
+            continue
+        denom = str(denom).strip()
+
+        fecha = _parse_date(cell(row, "fecha"))
+        neto = _parse_amount(cell(row, "neto")) or 0.0
+        nograv = _parse_amount(cell(row, "nograv")) or 0.0
+        exento = _parse_amount(cell(row, "exento")) or 0.0
+        iva = _parse_amount(cell(row, "iva")) or 0.0
+        total = _parse_amount(cell(row, "total"))
+        if total is None:
+            total = neto + nograv + exento + iva
+
+        tipo = cell(row, "tipo")
+        tipo_str = str(tipo).strip() if tipo is not None else ""
+        pv = cell(row, "ptovta")
+        nro = cell(row, "nrodesde")
+        numero = ""
+        if pv is not None and nro is not None:
+            try:
+                numero = f"{int(pv):04d}-{int(nro):08d}"
+            except (ValueError, TypeError):
+                numero = f"{pv}-{nro}"
+
+        moneda_raw = str(cell(row, "moneda") or "").strip()
+        moneda = "USD" if ("US" in moneda_raw.upper() or "U$" in moneda_raw) else "ARS"
+
+        if cuit not in clientes:
+            clientes[cuit] = {"cuit": cuit, "nombre": denom, "comprobantes": 0, "total": 0.0}
+        clientes[cuit]["comprobantes"] += 1
+        clientes[cuit]["total"] += (total or 0.0)
+
+        comprobantes.append({
+            "tipo": "cobrar",
+            "contraparte": denom,
+            "cuit": cuit,
+            "numero": numero,
+            "tipoComprobante": tipo_str,
+            "emision": fecha,
+            "moneda": moneda,
+            "neto": round(neto, 2),
+            "noGravado": round(nograv, 2),
+            "exento": round(exento, 2),
+            "iva": round(iva, 2),
+            "monto": round(total or 0.0, 2),
+        })
+
+    def fmt_cuit(c):
+        return f"{c[:2]}-{c[2:10]}-{c[10:]}" if len(c) == 11 else c
+
+    cli_list = sorted(clientes.values(), key=lambda p: -p["total"])
+    for c in cli_list:
+        c["cuitFmt"] = fmt_cuit(c["cuit"])
+        c["total"] = round(c["total"], 2)
+
+    total_iva = round(sum(c["iva"] for c in comprobantes), 2)
+    total_neto = round(sum(c["neto"] for c in comprobantes), 2)
+    total_monto = round(sum(c["monto"] for c in comprobantes), 2)
+
+    return {
+        "ok": True,
+        "clientes": cli_list,
+        "comprobantes": comprobantes,
+        "resumen": {
+            "clientes": len(cli_list),
+            "comprobantes": len(comprobantes),
+            "total_neto": total_neto,
+            "total_iva": total_iva,
+            "total": total_monto,
+            "skipped": skipped,
+            "sheet": sheet["title"],
         },
     }

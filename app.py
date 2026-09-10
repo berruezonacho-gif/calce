@@ -412,6 +412,19 @@ async def afip_libro_iva(file: UploadFile = File(...)):
     return importer.parse_libro_iva(content, file.filename or "")
 
 
+@app.post("/api/afip/libro-iva-ventas")
+async def afip_libro_iva_ventas(file: UploadFile = File(...)):
+    """Importa el Libro IVA Ventas de AFIP (Mis Comprobantes Emitidos).
+
+    Devuelve clientes únicos (CUIT + denominación) y las facturas de venta
+    a cobrar con IVA débito fiscal discriminado.
+    """
+    content = await file.read()
+    if len(content) > 8 * 1024 * 1024:
+        return {"ok": False, "error": "El archivo es muy grande (máximo 8 MB)."}
+    return importer.parse_libro_iva_ventas(content, file.filename or "")
+
+
 @app.post("/api/afip/retenciones")
 async def afip_retenciones(file: UploadFile = File(...)):
     """Importa un export de 'Mis Retenciones y Percepciones' de AFIP.
