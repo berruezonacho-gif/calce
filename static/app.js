@@ -551,6 +551,12 @@ function loadDemoDataset(ds) {
 
   // Proveedores del demo (directorio)
   state.proveedores = (ds.proveedores || []).map((p) => ({ ...p, id: "prov" + Math.random().toString(36).slice(2,8) }));
+
+  // Retenciones/percepciones del demo (crédito fiscal)
+  state.retenciones = (ds.retenciones || []).map((r) => ({
+    ...r,
+    fecha: (r.fecha && (r.fecha[0] === "d")) ? relDate(r.fecha) : r.fecha,
+  }));
 }
 
 // ── Cuentas ──────────────────────────────────────────────
