@@ -1776,7 +1776,7 @@ function renderInsights() {
 }
 
 // ── Excedente (placeholder con datos del cash flow) ──────
-function renderExcedente() {
+async function renderExcedente() {
   // El excedente es la liquidez que te sobra después de cubrir los pagos
   // próximos. El optimizador (renderOptimizar) hace ese cálculo por cuenta.
   const yaColocado = totalColocado("ARS");
@@ -1785,18 +1785,133 @@ function renderExcedente() {
     <div class="inv-head">
       <div>
         <div class="eyebrow">Excedente para invertir</div>
-        <h2 class="inv-title">Optimizar liquidez</h2>
-        <p class="inv-sub">Descontando lo que pagás en los próximos días, esto es lo que te sobra en cada cuenta para colocar en un FCI (se rescata al otro día). Vos decidís cuánto.</p>
+        <h2 class="inv-title">Invertir excedente</h2>
+        <p class="inv-sub">Cuánto podés colocar hoy, en qué fondo, y cuándo conviene rescatar según tus pagos programados.</p>
       </div>
     </div>
 
-    <div class="ctrl-card" id="optimizar-card" style="max-width:640px"></div>
+    <div class="ctrl-card" id="optimizar-card" style="max-width:720px"></div>
+
+    <div id="exc-asesoria" style="margin-top:20px"></div>
+
+    <div id="exc-fondos" style="margin-top:20px"></div>
 
     ${yaColocado > 0 ? `<p class="exc-note" style="margin-top:16px">Ya tenés ${money(yaColocado)} colocados en inversiones activas. <a href="#" id="exc-ver-cartera">Ver mi cartera →</a></p>` : ""}`;
 
   renderOptimizar();
+  renderAsesoriaExcedente();
+  renderFondosExcedente();
   const link = $("#exc-ver-cartera");
   if (link) link.addEventListener("click", (e) => { e.preventDefault(); switchView("cartera"); });
+}
+
+// Asesoría: cuándo suscribir y cuándo rescatar según los pagos programados.
+function renderAsesoriaExcedente() {
+  const host = $("#exc-asesoria");
+  if (!host) return;
+  // Colocable total hoy (todas las cuentas bancarias ARS)
+  const cuentas = state.accounts.filter(a => a.moneda === "ARS" && a.tipo !== "efectivo" && a.tipo !== "comitente");
+  const colocable = cuentas.reduce((s,a) => s + Math.max(0, saldoCuentaAFecha(a) - pagosDeHoy(a.id)), 0);
+  if (colocable <= 0) { host.innerHTML = ""; return; }
+
+  // Próximos pagos grandes (todas las cuentas), próximos 30 días, ordenados
+  let pagos = [];
+  cuentas.forEach(a => { pagos = pagos.concat(pagosProximos(a.id, 30)); });
+  pagos.sort((x,y) => new Date(x.date) - new Date(y.date));
+  // Agrupar por fecha
+  const porFecha = {};
+  pagos.forEach(p => { porFecha[p.date] = (porFecha[p.date]||0) + p.monto; });
+  const fechas = Object.keys(porFecha).sort();
+
+  const hoy = new Date().toISOString().slice(0,10);
+  const rescates = fechas.slice(0,5).map(f => {
+    const dias = Math.round((new Date(f+"T00:00:00") - new Date(hoy+"T00:00:00"))/86400000);
+    return { fecha: f, monto: porFecha[f], dias };
+  });
+
+  host.innerHTML = `
+    <div class="asesoria-card">
+      <div class="asesoria-head">
+        <span class="asesoria-ico">◆</span>
+        <div>
+          <h3>Plan de suscripción y rescate</h3>
+          <p>Colocá hoy el excedente en un money market (rescate al otro día) y traé la plata justo antes de cada pago.</p>
+        </div>
+      </div>
+      <div class="asesoria-suscribir">
+        <div class="asesoria-paso">
+          <span class="asesoria-dia">HOY</span>
+          <div class="asesoria-txt"><b>Suscribí ${money(colocable)}</b><span>en un FCI money market. Rinde desde mañana y lo tenés disponible en 24 hs.</span></div>
+        </div>
+      </div>
+      ${rescates.length ? `<div class="asesoria-timeline-t">Rescatá a medida que se acercan tus pagos:</div>
+      <div class="asesoria-timeline">
+        ${rescates.map(r => `<div class="asesoria-resc">
+          <div class="ar-date"><b>${new Date(r.fecha+"T00:00:00").getDate()}</b><span>${new Date(r.fecha+"T00:00:00").toLocaleDateString("es-AR",{month:"short"})}</span></div>
+          <div class="ar-body">
+            <b>Rescatá ${money(r.monto)}</b>
+            <span>Pedí el rescate el día anterior (T+1) para tener la plata el ${fmtDateShort(r.fecha)}${r.dias>=0?` · en ${r.dias} días`:""}.</span>
+          </div>
+        </div>`).join("")}
+      </div>` : `<p class="asesoria-sinpagos">No tenés pagos grandes en los próximos 30 días: podés dejar el excedente colocado tranquilo.</p>`}
+      <p class="asesoria-nota">Mientras la plata está en el fondo, rinde todos los días. Solo la traés cuando la necesitás.</p>
+    </div>`;
+}
+
+// Fondos money market disponibles (mejores por rendimiento)
+async function renderFondosExcedente() {
+  const host = $("#exc-fondos");
+  if (!host) return;
+  host.innerHTML = `<div class="inv-placeholder">Cargando fondos disponibles…</div>`;
+  if (!state.fciData) {
+    try { state.fciData = await (await fetch("/api/fci/money-market")).json(); }
+    catch { host.innerHTML = ""; return; }
+  }
+  const funds = (state.fciData.funds || []).slice().sort((a,b) => b.tna - a.tna);
+  if (!funds.length) { host.innerHTML = ""; return; }
+  const top = funds.slice(0, 6);
+  const srcNote = state.fciData.source === "CAFCI" ? "Rendimientos en vivo de CAFCI" : "Rendimientos de referencia";
+
+  host.innerHTML = `
+    <div class="fondos-card">
+      <div class="fondos-head">
+        <div>
+          <h3>Fondos money market disponibles</h3>
+          <p>Rescate en el día (T+0/T+1), riesgo muy bajo. ${srcNote}.</p>
+        </div>
+        <a href="#" id="fondos-ver-todos">Ver todos →</a>
+      </div>
+      <div class="fondos-list">
+        ${top.map(f => `<div class="fondo-row">
+          <div class="fondo-info"><b>${h(f.name)}</b><small>${h(f.manager||"")}</small></div>
+          <div class="fondo-tna"><b>${num2g(f.tna)}%</b><small>TNA</small></div>
+          <button class="fondo-colocar" data-tna="${f.tna}" data-name="${h(f.name)}" data-mgr="${h(f.manager||"")}">Colocar acá</button>
+        </div>`).join("")}
+      </div>
+    </div>`;
+
+  const verTodos = $("#fondos-ver-todos");
+  if (verTodos) verTodos.onclick = (e) => { e.preventDefault(); switchView("fci"); };
+  $$(".fondo-colocar").forEach(b => b.onclick = () => colocarEnFondoElegido(b.dataset.name, b.dataset.mgr, parseFloat(b.dataset.tna)));
+}
+
+// Colocar el excedente en un fondo específico elegido de la lista
+function colocarEnFondoElegido(name, manager, tna) {
+  const cuentas = state.accounts.filter(a => a.moneda === "ARS" && a.tipo !== "efectivo" && a.tipo !== "comitente");
+  // Elegir la cuenta con más colocable
+  let mejor = null, maxCol = 0;
+  cuentas.forEach(a => { const c = Math.max(0, saldoCuentaAFecha(a) - pagosDeHoy(a.id)); if (c > maxCol) { maxCol = c; mejor = a; } });
+  if (!mejor || maxCol <= 0) { alert("No hay excedente para colocar ahora."); return; }
+  openInvModal();
+  $("#i-tipo").value = "fci";
+  updateInvTipo();
+  $("#i-account").value = mejor.id;
+  updateInvTipo();
+  $("#i-monto").value = Math.round(maxCol);
+  $("#i-label").value = name || "FCI money market";
+  $("#i-sociedad").value = manager || "";
+  $("#i-rend").value = tna || 40;
+  updateInvPreview();
 }
 
 // ── Dólar: comprar / vender divisas ──────────────────────

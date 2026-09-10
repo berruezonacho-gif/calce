@@ -1385,3 +1385,43 @@ input:focus, select:focus {
 .pd-del:hover { color: var(--red); border-color: var(--red); }
 .pd-lock { font-size: 11px; opacity: .5; width: 20px; text-align: center; flex-shrink: 0; }
 .pd-hint { font-size: 10.5px; color: var(--slate-2); margin-top: 10px; }
+
+/* ═══ Asesoría de excedente (suscribir/rescatar) ══════════ */
+.asesoria-card { background: linear-gradient(180deg, #F0F6FF, var(--card)); border: 1px solid #C7DBF7; border-radius: 16px; padding: 22px 24px; max-width: 720px; }
+.asesoria-head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 18px; }
+.asesoria-ico { font-size: 20px; color: var(--accent); }
+.asesoria-head h3 { font-family: "Fraunces", serif; font-size: 17px; font-weight: 600; margin-bottom: 3px; }
+.asesoria-head p { font-size: 13px; color: var(--slate); }
+.asesoria-suscribir { margin-bottom: 16px; }
+.asesoria-paso { display: flex; gap: 14px; align-items: center; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.asesoria-dia { background: var(--navy); color: #fff; font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 8px; letter-spacing: .05em; }
+.asesoria-txt b { display: block; font-size: 15px; color: var(--navy); }
+.asesoria-txt span { font-size: 12.5px; color: var(--slate); }
+.asesoria-timeline-t { font-size: 12.5px; font-weight: 600; color: var(--slate); margin-bottom: 10px; }
+.asesoria-timeline { display: flex; flex-direction: column; gap: 8px; }
+.asesoria-resc { display: flex; gap: 14px; align-items: center; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: #fff; }
+.ar-date { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 46px; height: 46px; background: var(--paper); border-radius: 9px; }
+.ar-date b { font-family: "Fraunces", serif; font-size: 18px; font-weight: 600; line-height: 1; color: var(--navy); }
+.ar-date span { font-size: 10px; text-transform: uppercase; color: var(--slate-2); }
+.ar-body b { display: block; font-size: 14px; color: var(--ink); }
+.ar-body span { font-size: 12px; color: var(--slate); }
+.asesoria-sinpagos { font-size: 13px; color: var(--green); background: #EAF6EC; border-radius: 10px; padding: 12px 14px; }
+.asesoria-nota { font-size: 11.5px; color: var(--slate-2); margin-top: 12px; }
+
+/* ═══ Fondos disponibles ══════════════════════════════════ */
+.fondos-card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px 22px; max-width: 720px; box-shadow: var(--shadow); }
+.fondos-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+.fondos-head h3 { font-family: "Fraunces", serif; font-size: 16px; font-weight: 600; margin-bottom: 2px; }
+.fondos-head p { font-size: 12.5px; color: var(--slate); }
+.fondos-head a { font-size: 12.5px; color: var(--accent); font-weight: 500; white-space: nowrap; }
+.fondos-list { display: flex; flex-direction: column; gap: 8px; }
+.fondo-row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border: 1px solid var(--line-2); border-radius: 10px; }
+.fondo-row:hover { border-color: var(--line); background: #FAFBFD; }
+.fondo-info { flex: 1; min-width: 0; }
+.fondo-info b { display: block; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fondo-info small { font-size: 11px; color: var(--slate-2); }
+.fondo-tna { text-align: right; }
+.fondo-tna b { font-family: var(--mono); font-size: 15px; color: var(--green); }
+.fondo-tna small { display: block; font-size: 9.5px; color: var(--slate-2); }
+.fondo-colocar { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 7px 14px; font-family: "Inter", sans-serif; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.fondo-colocar:hover { filter: brightness(1.08); }
