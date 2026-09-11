@@ -2651,9 +2651,16 @@ function renderComprobantes() {
     return `<span class="comp-badge ${cls}">${txt}${extra}</span>`;
   };
 
-  const filaComp = (c) => `<tr class="comp-row" data-id="${c.id}">
+  const filaComp = (c) => {
+    // Toggle de IVA computable: solo en compras (pagar) con IVA cargado
+    const mostrarIva = !esCobrar && (c.iva || 0) > 0;
+    const ivaCell = mostrarIva
+      ? `<td class="comp-iva-cell"><label class="comp-iva-toggle" title="Marcá si el contador confirmó que este IVA es computable"><input type="checkbox" class="comp-iva-chk" data-ivachk="${c.id}" ${c.ivaComputable===true?"checked":""}><span>${money(c.iva)}</span></label></td>`
+      : (!esCobrar ? `<td class="muted">—</td>` : "");
+    return `<tr class="comp-row" data-id="${c.id}">
     <td class="comp-contra"><b>${h(c.contraparte || "—")}</b><small>${h(c.numero || "")}</small></td>
     <td class="mono">${moneyC(c.monto, c.moneda)}</td>
+    ${ivaCell}
     <td>${fmtDateFull(c.emision)}</td>
     <td>${fmtDateFull(c.vencimiento)}</td>
     <td>${estadoBadge(c)}</td>
@@ -2662,6 +2669,7 @@ function renderComprobantes() {
       <button class="comp-del-btn" data-del="${c.id}" title="Eliminar">×</button>
     </td>
   </tr>`;
+  };
 
   const orden = [...comps].sort((a,b) => {
     if ((a.estado==="saldado") !== (b.estado==="saldado")) return a.estado==="saldado" ? 1 : -1;
@@ -2708,9 +2716,10 @@ function renderComprobantes() {
     </div>
 
     <div class="table-card" style="margin-top:16px">
-      <div class="chart-head"><h2>${esCobrar?"Facturas por cobrar":"Facturas por pagar"}</h2></div>
+      <div class="chart-head"><h2>${esCobrar?"Facturas por cobrar":"Facturas por pagar"}</h2>${!esCobrar && comps.some(c=>(c.iva||0)>0) ? `<button class="btn-ghost sm" id="comp-validar-iva">✓ Validar todo el IVA del período</button>` : ""}</div>
+      ${!esCobrar && comps.some(c=>(c.iva||0)>0) ? `<p class="comp-iva-hint">Tildá el IVA de cada compra que tu contador confirmó como computable. Solo el IVA tildado se descuenta en tu posición de IVA (Resultado económico).</p>` : ""}
       ${orden.length ? `<div class="cf-table-scroll"><table class="cf-table">
-        <thead><tr><th>${esCobrar?"Cliente":"Proveedor"}</th><th>Monto</th><th>Emisión</th><th>Vencimiento</th><th>Estado</th><th></th></tr></thead>
+        <thead><tr><th>${esCobrar?"Cliente":"Proveedor"}</th><th>Monto</th>${!esCobrar?"<th>IVA computable</th>":""}<th>Emisión</th><th>Vencimiento</th><th>Estado</th><th></th></tr></thead>
         <tbody>${orden.map(filaComp).join("")}</tbody>
       </table></div>` : `<p class="cf-empty">No hay facturas cargadas. Tocá "Nueva factura" para empezar.</p>`}
     </div>`;
@@ -2719,6 +2728,23 @@ function renderComprobantes() {
   $("#comp-add").onclick = () => openCompModal(compTab);
   $$(".comp-saldar-btn").forEach(b => b.onclick = () => saldarComprobante(b.dataset.saldar));
   $$(".comp-del-btn").forEach(b => b.onclick = () => eliminarComprobante(b.dataset.del));
+  // Check de IVA computable por factura
+  $$(".comp-iva-chk").forEach(chk => chk.onchange = () => {
+    const c = state.comprobantes.find(x => x.id === chk.dataset.ivachk);
+    if (c) { c.ivaComputable = chk.checked; saveState(); }
+  });
+  // Validar todo el IVA del período (todas las compras con IVA)
+  const validarBtn = $("#comp-validar-iva");
+  if (validarBtn) validarBtn.onclick = () => {
+    const conIva = state.comprobantes.filter(c => c.tipo === "pagar" && (c.iva||0) > 0);
+    const yaValidados = conIva.filter(c => c.ivaComputable === true).length;
+    const todosValidados = yaValidados === conIva.length;
+    const accion = todosValidados ? "desmarcar" : "marcar";
+    if (!confirm(`¿${accion==="marcar"?"Validar":"Quitar la validación de"} el IVA de ${conIva.length} compras?\n\nSolo hacelo si tu contador confirmó que son computables.`)) return;
+    conIva.forEach(c => c.ivaComputable = !todosValidados);
+    saveState();
+    renderComprobantes();
+  };
   // Import de AFIP: contextual — Por cobrar → Libro IVA Ventas; Por pagar → Compras
   const afipBtn = $("#afip-import-btn");
   if (afipBtn) {
@@ -4978,8 +5004,10 @@ function calcularResultados(from, to) {
   //    Cobrar = ingreso (ventas); Pagar = gasto (según categoría).
   state.comprobantes.forEach(c => {
     if (!dentro(c.emision)) return;
-    // Usar el neto si está discriminado (sin IVA, que no es resultado); si no, el monto.
-    const base = (c.neto && c.neto > 0) ? c.neto : c.monto;
+    // Base = neto gravado + no gravado + exento (sin IVA). Si no hay ningún
+    // componente fiscal, usar el monto. Nunca el total cuando el neto es 0.
+    const tiene = (c.neto != null) || (c.noGravado != null) || (c.exento != null);
+    const base = tiene ? ((c.neto||0) + (c.noGravado||0) + (c.exento||0)) : (c.monto || 0);
     if (c.tipo === "cobrar") add("ventas", Math.abs(base));
     else add(c.categoria || "proveedores", -Math.abs(base));
   });

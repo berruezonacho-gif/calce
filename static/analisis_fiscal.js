@@ -35,8 +35,16 @@ function calcularFiscal(from, to) {
   const posicionIVA = ivaDebito - ivaCreditoValidado - ivaRetPerc;
 
   // Resultado documental (ventas netas − compras netas). NO es base de Ganancias.
-  const ventasNeto = ventas.reduce((s,c) => s + (c.neto || c.monto || 0), 0);
-  const comprasNeto = compras.reduce((s,c) => s + (c.neto || c.monto || 0), 0);
+  // Base de resultado = neto gravado + no gravado + exento (NUNCA el monto
+  // total, que incluye IVA). Si no hay ningún componente, es 0 (no el total).
+  const baseResultado = (c) => {
+    const tiene = (c.neto != null) || (c.noGravado != null) || (c.exento != null);
+    if (tiene) return (c.neto||0) + (c.noGravado||0) + (c.exento||0);
+    // Sin discriminación fiscal: usar el monto (caja simple, sin IVA conocido)
+    return c.monto || 0;
+  };
+  const ventasNeto = ventas.reduce((s,c) => s + baseResultado(c), 0);
+  const comprasNeto = compras.reduce((s,c) => s + baseResultado(c), 0);
   const resultadoDocumental = ventasNeto - comprasNeto;
 
   return {

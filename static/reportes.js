@@ -395,8 +395,8 @@ async function exportarReporteFiscalExcel() {
   const u = ultMes ? meses[ultMes] : { ventasNeto:0,facturacion:0,ivaDebito:0,ivaCredito:0 };
   const retIVA = rets.filter(r => (r.impuesto||"").toUpperCase().includes("IVA") && _mesDe(r.fecha) === ultMes).reduce((s,r)=>s+(r.importe||0),0);
   const ivaPreliminar = u.ivaDebito - u.ivaCredito - retIVA;
-  const totalVentasNeto = ventas.reduce((s,c)=>s+(c.neto||0),0);
-  const totalComprasBase = compras.reduce((s,c)=>s+(c.neto||0),0);
+  const totalVentasNeto = ventas.reduce((s,c)=>s+((c.neto||0)+(c.noGravado||0)+(c.exento||0)),0);
+  const totalComprasBase = compras.reduce((s,c)=>s+((c.neto||0)+(c.noGravado||0)+(c.exento||0)),0);
   const resultadoDoc = totalVentasNeto - totalComprasBase;
   // Variación interanual (mismo mes año anterior)
   let varInter = null;
