@@ -32,11 +32,64 @@ function agregarEncabezadoPDF(doc, empresa) {
   return 88; // Y donde puede empezar el contenido
 }
 
-// ── Helpers Excel (SheetJS) ─────────────────────────────────────
-function _wsFromAoa(aoa) { return XLSX.utils.aoa_to_sheet(aoa); }
-function _styleRange(ws, from, to, style) {
-  // SheetJS community no aplica estilos; se dejan los valores y fórmulas.
-  // El formato visual se logra en el PDF; el Excel mantiene fórmulas vivas.
+// ── Helpers Excel (ExcelJS con estilos de marca) ────────────────
+const XLS_NAVY = "FF0B1F3A", XLS_TEAL = "FF2DD4BF", XLS_GREY = "FFF2F2F2", XLS_WHITE = "FFFFFFFF";
+const XLS_MONEY = '"$"#,##0;("$"#,##0)';
+
+// Estilos reutilizables (tipos de fila)
+function _xlsTitle(cell) {
+  cell.font = { bold: true, color: { argb: XLS_WHITE }, size: 14, name: "Calibri" };
+  cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XLS_NAVY } };
+  cell.alignment = { vertical: "middle" };
+}
+function _xlsHeader(cell) {
+  cell.font = { bold: true, color: { argb: XLS_WHITE }, size: 10 };
+  cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XLS_NAVY } };
+  cell.alignment = { vertical: "middle" };
+  cell.border = { bottom: { style: "thin", color: { argb: "FFCCCCCC" } } };
+}
+function _xlsSection(cell) { // subsección teal
+  cell.font = { bold: true, color: { argb: XLS_NAVY }, size: 10 };
+  cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XLS_TEAL } };
+}
+function _xlsSubtotal(cell) { // total gris
+  cell.font = { bold: true, color: { argb: "FF000000" }, size: 10 };
+  cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XLS_GREY } };
+}
+function _xlsResult(cell) { // resultado clave navy
+  cell.font = { bold: true, color: { argb: XLS_WHITE }, size: 11 };
+  cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XLS_NAVY } };
+}
+
+// Agrega el encabezado de empresa a una hoja ExcelJS. Devuelve la fila siguiente.
+async function _xlsEncabezado(ws, wb, titulo, subtitulo) {
+  const emp = _emp();
+  let row = 1;
+  // Logo si existe
+  if (emp.logo) {
+    try {
+      const imgId = wb.addImage({ base64: emp.logo, extension: "png" });
+      ws.addImage(imgId, { tl: { col: 0, row: 0 }, ext: { width: 120, height: 48 } });
+      ws.getRow(1).height = 40;
+    } catch (e) {}
+  }
+  const rEmp = ws.getRow(1); rEmp.getCell(emp.logo ? 3 : 1).value = emp.nombre || "Mi Empresa";
+  rEmp.getCell(emp.logo ? 3 : 1).font = { bold: true, size: 14, color: { argb: XLS_NAVY } };
+  const rSub = ws.getRow(2);
+  rSub.getCell(1).value = `${titulo}  ·  Generado el ${_hoyTxt()}${emp.cuit ? "  ·  CUIT "+emp.cuit : ""}`;
+  rSub.getCell(1).font = { size: 9, color: { argb: "FF787878" }, italic: true };
+  if (subtitulo) { ws.getRow(3).getCell(1).value = subtitulo; ws.getRow(3).getCell(1).font = { size: 9, color: { argb: "FF787878" } }; row = 4; }
+  else row = 3;
+  return row + 1; // deja una fila en blanco
+}
+
+async function _xlsSave(wb, filename) {
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
 }
 function _saveXlsx(wb, filename) { XLSX.writeFile(wb, filename); }
 
@@ -71,42 +124,30 @@ function _flujoDatos() {
   return { from, to, ccy, cuentaFiltro, ingresos, egresos };
 }
 
-function exportarFlujoExcel() {
+async function exportarFlujoExcel() {
   const d = _flujoDatos();
-  const emp = _emp();
-  const aoa = [
-    [`${emp.nombre} — Flujo de Caja (resumen)`],
-    [`Cuenta: ${d.cuentaFiltro ? accountName(d.cuentaFiltro) : "Todas (consolidado)"}  |  Moneda: ${d.ccy}  |  Periodo: ${_short(d.from)} a ${_short(d.to)}`],
-    [],
-    ["Categoria", "Monto"],
-    ["INGRESOS"],
-  ];
-  let rIni = 6;
-  const ingKeys = Object.keys(d.ingresos);
-  ingKeys.forEach(k => aoa.push([k, d.ingresos[k]]));
-  const ingFrom = rIni, ingTo = rIni + ingKeys.length - 1;
-  aoa.push(["Subtotal Ingresos", ingKeys.length ? { f: `SUM(B${ingFrom}:B${ingTo})` } : 0]);
-  aoa.push([]);
-  aoa.push(["EGRESOS"]);
-  const egrStart = aoa.length + 1;
-  const egrKeys = Object.keys(d.egresos);
-  egrKeys.forEach(k => aoa.push([k, d.egresos[k]]));
-  const egrTo = egrStart + egrKeys.length - 1;
-  aoa.push(["Subtotal Egresos", egrKeys.length ? { f: `SUM(B${egrStart}:B${egrTo})` } : 0]);
-  const subIngRow = ingTo + 1, subEgrRow = aoa.length;
-  aoa.push([]);
-  aoa.push(["FLUJO NETO", { f: `B${subIngRow}-B${subEgrRow}` }]);
-
-  const ws = _wsFromAoa(aoa);
-  ws["!cols"] = [{ wch: 40 }, { wch: 16 }];
-  // Formato moneda a la columna B
-  for (let R = 4; R < aoa.length; R++) {
-    const cell = ws["B" + (R + 1)];
-    if (cell && typeof cell.v !== "undefined") cell.z = MONEY_FMT;
-  }
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Flujo de Caja");
-  _saveXlsx(wb, `Flujo_de_Caja_${_short(d.from)}_${_short(d.to)}.xlsx`.replace(/[\/\s]/g,"-"));
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Flujo de Caja");
+  ws.columns = [{ width: 40 }, { width: 18 }];
+  let r = await _xlsEncabezado(ws, wb, "Flujo de Caja (resumen)",
+    `Cuenta: ${d.cuentaFiltro?accountName(d.cuentaFiltro):"Todas (consolidado)"}  ·  Moneda: ${d.ccy}  ·  ${_short(d.from)} a ${_short(d.to)}`);
+  // Título de tabla
+  const hdr = ws.getRow(r); hdr.getCell(1).value = "Categoría"; hdr.getCell(2).value = "Monto";
+  _xlsHeader(hdr.getCell(1)); _xlsHeader(hdr.getCell(2)); r++;
+  const setMoney = (cell, v) => { cell.value = v; cell.numFmt = XLS_MONEY; cell.alignment = { horizontal: "right" }; };
+  // Ingresos
+  let rowSec = ws.getRow(r); rowSec.getCell(1).value = "INGRESOS"; _xlsSection(rowSec.getCell(1)); _xlsSection(rowSec.getCell(2)); r++;
+  let tIng = 0;
+  Object.keys(d.ingresos).forEach(k => { const row = ws.getRow(r); row.getCell(1).value = k; setMoney(row.getCell(2), d.ingresos[k]); tIng += d.ingresos[k]; r++; });
+  let rowSub = ws.getRow(r); rowSub.getCell(1).value = "Subtotal Ingresos"; _xlsSubtotal(rowSub.getCell(1)); setMoney(rowSub.getCell(2), tIng); _xlsSubtotal(rowSub.getCell(2)); r++;
+  // Egresos
+  rowSec = ws.getRow(r); rowSec.getCell(1).value = "EGRESOS"; _xlsSection(rowSec.getCell(1)); _xlsSection(rowSec.getCell(2)); r++;
+  let tEgr = 0;
+  Object.keys(d.egresos).forEach(k => { const row = ws.getRow(r); row.getCell(1).value = k; setMoney(row.getCell(2), d.egresos[k]); tEgr += d.egresos[k]; r++; });
+  rowSub = ws.getRow(r); rowSub.getCell(1).value = "Subtotal Egresos"; _xlsSubtotal(rowSub.getCell(1)); setMoney(rowSub.getCell(2), tEgr); _xlsSubtotal(rowSub.getCell(2)); r++;
+  // Flujo neto
+  const rowRes = ws.getRow(r); rowRes.getCell(1).value = "FLUJO NETO"; _xlsResult(rowRes.getCell(1)); setMoney(rowRes.getCell(2), tIng - tEgr); _xlsResult(rowRes.getCell(2));
+  await _xlsSave(wb, `Flujo_de_Caja_${_short(d.from)}_${_short(d.to)}.xlsx`.replace(/[\/\s]/g,"-"));
 }
 
 function exportarFlujoPDF() {
@@ -141,44 +182,44 @@ function exportarFlujoPDF() {
 // ════════════════════════════════════════════════════════════════
 // 2. RENDIMIENTO DEL EXCEDENTE
 // ════════════════════════════════════════════════════════════════
-function exportarRendimientoExcel(detalle, label, to) {
-  const emp = _emp();
-  const aoa = [
-    [`${emp.nombre} — Rendimiento del Excedente Invertido`],
-    ["Moneda: ARS"],
-    [],
-    ["Fecha del reporte", _hoyTxt()],
-    [],
-    ["Total generado por el excedente invertido en el periodo"],
-    [""], // se completa con fórmula al final
-    [],
-    ["Tipo", "Instrumento", "Monto colocado", "TNA / TIR", "Fecha colocacion", "Estado", "Rendimiento devengado"],
-  ];
-  const rIni = 10;
-  detalle.forEach(x => aoa.push([
-    (typeof tipoInvLabel === "function" ? tipoInvLabel(x.inv.tipo) : x.inv.tipo),
-    x.inv.label || "", x.inv.monto, (x.inv.rendimiento||0)/100,
-    x.inv.fechaColocacion || "", x.inv.estado || "", x.rend,
-  ]));
-  const rFin = rIni + detalle.length - 1;
-  aoa.push(["Total", "", "", "", "", "", detalle.length ? { f: `SUM(G${rIni}:G${rFin})` } : 0]);
-  const totalRow = aoa.length;
-  aoa[6] = [{ f: `G${totalRow}` }]; // KPI = total
-  aoa.push([]);
-  aoa.push(["Rendimiento devengado = Monto x Tasa x Dias/365 (interes simple, sin descontar comisiones/impuestos)."]);
-  aoa.push(["Este es dinero que, sin colocarlo, habria quedado parado en la cuenta sin generar nada."]);
-
-  const ws = _wsFromAoa(aoa);
-  ws["!cols"] = [{wch:18},{wch:26},{wch:16},{wch:10},{wch:16},{wch:12},{wch:20}];
-  // formato moneda col C y G
-  for (let R = rIni; R <= totalRow; R++) {
-    ["C","G"].forEach(col => { const c = ws[col+R]; if (c) c.z = MONEY_FMT; });
-    const d = ws["D"+R]; if (d) d.z = "0.0%";
-  }
-  const kpi = ws["A7"]; if (kpi) kpi.z = MONEY_FMT;
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Rendimiento Excedente");
-  _saveXlsx(wb, `Rendimiento_Excedente_${(label||"").replace(/\s+/g,"_")}.xlsx`);
+async function exportarRendimientoExcel(detalle, label, to) {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Rendimiento Excedente");
+  ws.columns = [{width:18},{width:26},{width:16},{width:11},{width:16},{width:12},{width:20}];
+  let r = await _xlsEncabezado(ws, wb, "Rendimiento del Excedente Invertido", `Periodo: ${label}  ·  Moneda: ARS`);
+  const setMoney = (cell, v) => { cell.value = v; cell.numFmt = XLS_MONEY; cell.alignment = { horizontal: "right" }; };
+  // KPI
+  const total = detalle.reduce((s,x)=>s+x.rend,0);
+  const kpiRow = ws.getRow(r);
+  kpiRow.getCell(1).value = "TOTAL GENERADO POR EL EXCEDENTE INVERTIDO";
+  ws.mergeCells(r,1,r,6);
+  kpiRow.getCell(1).font = { bold:true, color:{argb:XLS_WHITE}, size:11 };
+  kpiRow.getCell(1).fill = { type:"pattern", pattern:"solid", fgColor:{argb:XLS_NAVY} };
+  const kpiVal = kpiRow.getCell(7); setMoney(kpiVal, total);
+  kpiVal.font = { bold:true, color:{argb:"FF4ADE80"}, size:12 };
+  kpiVal.fill = { type:"pattern", pattern:"solid", fgColor:{argb:XLS_NAVY} };
+  r += 2;
+  // Header tabla
+  const hdrs = ["Tipo","Instrumento","Monto colocado","TNA %","Fecha colocación","Estado","Rendimiento"];
+  const hr = ws.getRow(r); hdrs.forEach((h,i)=>{ hr.getCell(i+1).value = h; _xlsHeader(hr.getCell(i+1)); }); r++;
+  detalle.forEach(x => {
+    const row = ws.getRow(r);
+    row.getCell(1).value = (typeof tipoInvLabel==="function"?tipoInvLabel(x.inv.tipo):x.inv.tipo);
+    row.getCell(2).value = x.inv.label||"";
+    setMoney(row.getCell(3), x.inv.monto||0);
+    row.getCell(4).value = x.inv.rendimiento ? x.inv.rendimiento/100 : 0; row.getCell(4).numFmt = "0.0%";
+    row.getCell(5).value = x.inv.fechaColocacion||"";
+    row.getCell(6).value = x.inv.estado||"";
+    setMoney(row.getCell(7), x.rend);
+    r++;
+  });
+  // Total
+  const tr = ws.getRow(r); tr.getCell(1).value = "TOTAL"; ws.mergeCells(r,1,r,6);
+  _xlsResult(tr.getCell(1)); setMoney(tr.getCell(7), total); _xlsResult(tr.getCell(7)); r += 2;
+  ws.getRow(r).getCell(1).value = "Rendimiento devengado = Monto × Tasa × Días/365 (interés simple, sin comisiones ni impuestos)."; r++;
+  const nota = ws.getRow(r).getCell(1); nota.value = "Este es dinero que, sin colocarlo, habría quedado parado en la cuenta sin generar nada.";
+  nota.font = { italic:true, bold:true, color:{argb:"FF2E7D32"} };
+  await _xlsSave(wb, `Rendimiento_Excedente_${(label||"").replace(/\s+/g,"_")}.xlsx`);
 }
 
 function exportarRendimientoPDF(detalle, label, to) {
@@ -222,44 +263,32 @@ function exportarRendimientoPDF(detalle, label, to) {
 // ════════════════════════════════════════════════════════════════
 // 3. ESTADO DE RESULTADOS
 // ════════════════════════════════════════════════════════════════
-function exportarEstadoResultadosXlsx(acum, label) {
-  const emp = _emp();
+async function exportarEstadoResultadosXlsx(acum, label) {
   const grupos = { ingresos: [], costos: [], gastos: [], impuestos: [], financieros: [] };
   Object.values(acum).forEach(r => { if (grupos[r.grupo]) grupos[r.grupo].push(r); });
-  const aoa = [
-    [`${emp.nombre} — Estado de Resultados (por devengado)`],
-    [`Periodo: ${label}  |  Criterio: devengado (fecha de emision)`],
-    [], ["Categoria", "Monto"],
-  ];
-  const push = (label, monto, style) => aoa.push([label, monto]);
-  const seccion = (titulo, arr, signo=1) => {
-    aoa.push([titulo]);
-    let t = 0;
-    arr.forEach(r => { const v = Math.abs(r.monto); aoa.push([r.rubro, v]); t += v; });
-    return t;
-  };
-  const tIng = seccion("INGRESOS", grupos.ingresos);
-  aoa.push(["Total INGRESOS", tIng]);
-  const tCos = seccion("COSTOS (directos)", grupos.costos);
-  if (grupos.costos.length) aoa.push(["Total Costos", tCos]);
-  aoa.push(["RESULTADO BRUTO", tIng - tCos]);
-  const tGas = seccion("GASTOS (administracion)", grupos.gastos);
-  aoa.push(["Total Gastos", tGas]);
-  aoa.push(["RESULTADO OPERATIVO", tIng - tCos - tGas]);
-  const tImp = seccion("IMPUESTOS", grupos.impuestos);
-  if (grupos.impuestos.length) aoa.push(["Total IMPUESTOS", tImp]);
-  const tFin = seccion("FINANCIEROS", grupos.financieros);
-  if (grupos.financieros.length) aoa.push(["Total FINANCIEROS", tFin]);
-  aoa.push(["RESULTADO NETO", tIng - tCos - tGas - tImp - tFin]);
-  aoa.push([]);
-  aoa.push(["Devengado = se imputa a la fecha de emision del comprobante, no a la de cobro/pago."]);
-
-  const ws = _wsFromAoa(aoa);
-  ws["!cols"] = [{wch:40},{wch:16}];
-  for (let R=4; R<aoa.length; R++){ const c=ws["B"+(R+1)]; if(c && typeof c.v!=="undefined") c.z=MONEY_FMT; }
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Estado de Resultados");
-  _saveXlsx(wb, `Estado_de_Resultados_${label.replace(/\s+/g,"_")}.xlsx`);
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Estado de Resultados");
+  ws.columns = [{width:40},{width:18}];
+  let r = await _xlsEncabezado(ws, wb, "Estado de Resultados (por devengado)", `Periodo: ${label}  ·  Criterio: devengado (fecha de emisión)`);
+  const setMoney = (cell, v) => { cell.value = v; cell.numFmt = XLS_MONEY; cell.alignment = { horizontal: "right" }; };
+  const hr = ws.getRow(r); hr.getCell(1).value = "Categoría"; hr.getCell(2).value = "Monto"; _xlsHeader(hr.getCell(1)); _xlsHeader(hr.getCell(2)); r++;
+  const sec = (txt) => { const row = ws.getRow(r); row.getCell(1).value = txt; _xlsSection(row.getCell(1)); _xlsSection(row.getCell(2)); r++; };
+  const item = (txt,v) => { const row = ws.getRow(r); row.getCell(1).value = txt; setMoney(row.getCell(2), v); r++; };
+  const tot = (txt,v) => { const row = ws.getRow(r); row.getCell(1).value = txt; _xlsSubtotal(row.getCell(1)); setMoney(row.getCell(2), v); _xlsSubtotal(row.getCell(2)); r++; };
+  const res = (txt,v) => { const row = ws.getRow(r); row.getCell(1).value = txt; _xlsResult(row.getCell(1)); setMoney(row.getCell(2), v); _xlsResult(row.getCell(2)); r++; };
+  let tIng=0,tCos=0,tGas=0,tImp=0,tFin=0;
+  sec("INGRESOS"); grupos.ingresos.forEach(x=>{const v=Math.abs(x.monto); item(x.rubro,v); tIng+=v;}); tot("Total INGRESOS",tIng);
+  if(grupos.costos.length){ sec("COSTOS (directos)"); grupos.costos.forEach(x=>{const v=Math.abs(x.monto); item(x.rubro,v); tCos+=v;}); tot("Total Costos",tCos); }
+  res("RESULTADO BRUTO", tIng-tCos);
+  sec("GASTOS (administración)"); grupos.gastos.forEach(x=>{const v=Math.abs(x.monto); item(x.rubro,v); tGas+=v;}); tot("Total Gastos",tGas);
+  res("RESULTADO OPERATIVO", tIng-tCos-tGas);
+  if(grupos.impuestos.length){ sec("IMPUESTOS"); grupos.impuestos.forEach(x=>{const v=Math.abs(x.monto); item(x.rubro,v); tImp+=v;}); tot("Total IMPUESTOS",tImp); }
+  if(grupos.financieros.length){ sec("FINANCIEROS"); grupos.financieros.forEach(x=>{const v=Math.abs(x.monto); item(x.rubro,v); tFin+=v;}); tot("Total FINANCIEROS",tFin); }
+  res("RESULTADO NETO", tIng-tCos-tGas-tImp-tFin);
+  r++;
+  const nota = ws.getRow(r).getCell(1); nota.value = "Devengado = se imputa a la fecha de emisión del comprobante, no a la de cobro/pago (a diferencia del Flujo de Caja).";
+  nota.font = { italic:true, size:9, color:{argb:"FF787878"} };
+  await _xlsSave(wb, `Estado_de_Resultados_${label.replace(/\s+/g,"_")}.xlsx`);
 }
 
 function exportarEstadoResultadosPdf(acum, label) {
@@ -297,29 +326,25 @@ function exportarEstadoResultadosPdf(acum, label) {
 // ════════════════════════════════════════════════════════════════
 // 4. SUMAS Y SALDOS
 // ════════════════════════════════════════════════════════════════
-function exportarSumasSaldosXlsx(cuentas, label) {
-  const emp = _emp();
-  const aoa = [
-    [`${emp.nombre} — Sumas y Saldos (vista de gestion)`],
-    [`Periodo: ${label}`],
-    [], ["Fecha de corte", _hoyTxt()], [],
-    ["Cuenta", "Debe", "Haber"],
-  ];
-  const rIni = 7;
-  cuentas.forEach(c => aoa.push([c.nombre, c.debe || "", c.haber || ""]));
-  const rFin = rIni + cuentas.length - 1;
-  aoa.push(["TOTAL", { f: `SUM(B${rIni}:B${rFin})` }, { f: `SUM(C${rIni}:C${rFin})` }]);
-  const totalRow = aoa.length;
-  aoa.push(["Diferencia (Debe - Haber)", { f: `B${totalRow}-C${totalRow}` }, ""]);
-  aoa.push([]);
-  aoa.push(["ADVERTENCIA: el Debe y el Haber NO cierran en cero porque no se registra una cuenta de Patrimonio/Capital inicial. Es una vista de gestion, no un balance contable legal."]);
-
-  const ws = _wsFromAoa(aoa);
-  ws["!cols"] = [{wch:48},{wch:16},{wch:16}];
-  for (let R=6; R<=totalRow; R++){ ["B","C"].forEach(col=>{const c=ws[col+R]; if(c) c.z=MONEY_FMT;}); }
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Sumas y Saldos");
-  _saveXlsx(wb, `Sumas_y_Saldos_${label.replace(/\s+/g,"_")}.xlsx`);
+async function exportarSumasSaldosXlsx(cuentas, label) {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Sumas y Saldos");
+  ws.columns = [{width:48},{width:16},{width:16}];
+  let r = await _xlsEncabezado(ws, wb, "Sumas y Saldos (vista de gestión)", `Periodo: ${label}  ·  Corte: ${_hoyTxt()}`);
+  const setMoney = (cell, v) => { cell.value = v; cell.numFmt = XLS_MONEY; cell.alignment = { horizontal: "right" }; };
+  const hr = ws.getRow(r); ["Cuenta","Debe","Haber"].forEach((h,i)=>{ hr.getCell(i+1).value = h; _xlsHeader(hr.getCell(i+1)); }); r++;
+  cuentas.forEach(c => { const row = ws.getRow(r); row.getCell(1).value = c.nombre; if(c.debe) setMoney(row.getCell(2), c.debe); if(c.haber) setMoney(row.getCell(3), c.haber); r++; });
+  const totD = cuentas.reduce((s,c)=>s+(c.debe||0),0), totH = cuentas.reduce((s,c)=>s+(c.haber||0),0);
+  const tr = ws.getRow(r); tr.getCell(1).value = "TOTAL"; _xlsResult(tr.getCell(1)); setMoney(tr.getCell(2), totD); _xlsResult(tr.getCell(2)); setMoney(tr.getCell(3), totH); _xlsResult(tr.getCell(3)); r++;
+  const dr = ws.getRow(r); dr.getCell(1).value = "Diferencia (Debe − Haber)"; dr.getCell(1).font = { bold:true }; setMoney(dr.getCell(2), totD-totH); dr.getCell(2).font = { bold:true }; r += 2;
+  ws.mergeCells(r,1,r,3);
+  const adv = ws.getRow(r).getCell(1);
+  adv.value = "ADVERTENCIA: el Debe y el Haber NO cierran en cero porque no se registra una cuenta de Patrimonio/Capital inicial. Es una vista de gestión, no un balance contable legal.";
+  adv.font = { bold:true, color:{argb:"FFB23A3A"}, size:9 };
+  adv.fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FFFBEDED"} };
+  adv.alignment = { wrapText:true, vertical:"top" };
+  ws.getRow(r).height = 32;
+  await _xlsSave(wb, `Sumas_y_Saldos_${label.replace(/\s+/g,"_")}.xlsx`);
 }
 
 function exportarSumasSaldosPdf(cuentas, label) {
@@ -354,106 +379,100 @@ function exportarSumasSaldosPdf(cuentas, label) {
 
 function _mesDe(iso) { return iso ? iso.slice(0,7) : ""; }
 
-function exportarReporteFiscalExcel() {
-  const emp = _emp();
+async function exportarReporteFiscalExcel() {
   const comps = state.comprobantes || [];
   const rets = state.retenciones || [];
   const ventas = comps.filter(c => c.tipo === "cobrar");
   const compras = comps.filter(c => c.tipo === "pagar");
 
-  // ── Indicadores mensuales ──
+  // Indicadores mensuales
   const meses = {};
   const bucket = (m) => (meses[m] = meses[m] || { ventasNeto:0, facturacion:0, ivaDebito:0, comprasBase:0, comprasTotal:0, ivaCredito:0 });
   ventas.forEach(c => { const m=_mesDe(c.emision); if(!m)return; const b=bucket(m); b.ventasNeto+=(c.neto||0); b.facturacion+=(c.monto||0); b.ivaDebito+=(c.iva||0); });
   compras.forEach(c => { const m=_mesDe(c.emision); if(!m)return; const b=bucket(m); b.comprasBase+=(c.neto||0); b.comprasTotal+=(c.monto||0); b.ivaCredito+=(c.iva||0); });
   const mesesOrd = Object.keys(meses).sort();
-
-  // ── Totales / último mes ──
   const ultMes = mesesOrd[mesesOrd.length-1];
   const u = ultMes ? meses[ultMes] : { ventasNeto:0,facturacion:0,ivaDebito:0,ivaCredito:0 };
-  // Retenciones/percepciones de IVA DEL MISMO MES (no de todo el historial)
   const retIVA = rets.filter(r => (r.impuesto||"").toUpperCase().includes("IVA") && _mesDe(r.fecha) === ultMes).reduce((s,r)=>s+(r.importe||0),0);
   const ivaPreliminar = u.ivaDebito - u.ivaCredito - retIVA;
   const totalVentasNeto = ventas.reduce((s,c)=>s+(c.neto||0),0);
   const totalComprasBase = compras.reduce((s,c)=>s+(c.neto||0),0);
   const resultadoDoc = totalVentasNeto - totalComprasBase;
 
-  const wb = XLSX.utils.book_new();
+  const wb = new ExcelJS.Workbook();
+  const setMoney = (cell, v) => { cell.value = v; cell.numFmt = XLS_MONEY; cell.alignment = { horizontal: "right" }; };
 
-  // Hoja Dashboard
-  const dash = [
-    [`${emp.nombre} — REPORTE FISCAL Y FINANCIERO`],
-    [`Generado el ${_hoyTxt()}  ·  CUIT ${emp.cuit||"—"}`],
-    [],
-    ["Ventas netas (últ. mes)", u.ventasNeto],
-    ["Facturación (últ. mes)", u.facturacion],
-    ["IVA débito (últ. mes)", u.ivaDebito],
-    ["IVA crédito (últ. mes)", u.ivaCredito],
-    ["Retenciones/percepciones IVA", retIVA],
-    ["IVA preliminar", ivaPreliminar],
-    [],
-    ["Resultado documental (total)", resultadoDoc],
-    ["Comprobantes emitidos", ventas.length],
-    ["Comprobantes recibidos", compras.length],
-    [],
-    ["Lectura ejecutiva"],
-    [ivaPreliminar > 0 ? "• IVA preliminar a pagar en el período (validar créditos con el contador)." : "• Saldo de IVA a favor en el período."],
-    ["• Las ventas netas documentadas surgen del Libro IVA."],
-    ["• El resultado documental NO es la base imponible de Ganancias."],
-    ["• La caja se muestra según lo cargado; requiere conciliación bancaria."],
-  ];
-  const wsDash = XLSX.utils.aoa_to_sheet(dash);
-  wsDash["!cols"] = [{wch:32},{wch:18}];
-  for (let R=4;R<=13;R++){ const c=wsDash["B"+R]; if(c&&typeof c.v==="number") c.z=MONEY_FMT; }
-  XLSX.utils.book_append_sheet(wb, wsDash, "Dashboard");
+  // ── Hoja Dashboard ──
+  const wsD = wb.addWorksheet("Dashboard");
+  wsD.columns = [{width:34},{width:20}];
+  let r = await _xlsEncabezado(wsD, wb, "REPORTE FISCAL Y FINANCIERO", ultMes ? `Último período: ${ultMes}` : "");
+  const kpi = (txt, v, money=true) => { const row = wsD.getRow(r); row.getCell(1).value = txt; row.getCell(1).font={bold:true,color:{argb:XLS_NAVY}}; if(money) setMoney(row.getCell(2), v); else { row.getCell(2).value=v; row.getCell(2).alignment={horizontal:"right"}; } r++; };
+  kpi("Ventas netas (últ. mes)", u.ventasNeto);
+  kpi("Facturación (últ. mes)", u.facturacion);
+  kpi("IVA débito (últ. mes)", u.ivaDebito);
+  kpi("IVA crédito (últ. mes)", u.ivaCredito);
+  kpi("Retenciones/percepciones IVA", retIVA);
+  const rPre = wsD.getRow(r); rPre.getCell(1).value="IVA preliminar"; _xlsResult(rPre.getCell(1)); setMoney(rPre.getCell(2), ivaPreliminar); _xlsResult(rPre.getCell(2)); r++;
+  r++;
+  kpi("Resultado documental (total)", resultadoDoc);
+  kpi("Comprobantes emitidos", ventas.length, false);
+  kpi("Comprobantes recibidos", compras.length, false);
+  r++;
+  const rLect = wsD.getRow(r); rLect.getCell(1).value = "Lectura ejecutiva"; _xlsSection(rLect.getCell(1)); _xlsSection(rLect.getCell(2)); r++;
+  [ (ivaPreliminar>0?"• IVA preliminar a pagar en el período (validar créditos con el contador).":"• Saldo de IVA a favor en el período."),
+    "• Las ventas netas documentadas surgen del Libro IVA.",
+    "• El resultado documental NO es la base imponible de Ganancias.",
+    "• La caja requiere conciliación bancaria." ].forEach(t => { wsD.getRow(r).getCell(1).value=t; wsD.getRow(r).getCell(1).font={size:10,color:{argb:"FF444444"}}; r++; });
 
-  // Hoja Indicadores mensuales
-  const ind = [["INDICADORES MENSUALES"],["Cálculos normalizados por período"],[],
-    ["Período","Ventas netas","Facturación","IVA débito","Compras base","Compras total","IVA crédito","IVA preliminar"]];
-  mesesOrd.forEach(m => { const b=meses[m]; ind.push([m, b.ventasNeto, b.facturacion, b.ivaDebito, b.comprasBase, b.comprasTotal, b.ivaCredito, b.ivaDebito-b.ivaCredito]); });
-  const wsInd = XLSX.utils.aoa_to_sheet(ind);
-  wsInd["!cols"] = [{wch:10},{wch:14},{wch:14},{wch:13},{wch:13},{wch:14},{wch:12},{wch:13}];
-  for (let R=5;R<ind.length+1;R++){ ["B","C","D","E","F","G","H"].forEach(col=>{const c=wsInd[col+R]; if(c) c.z=MONEY_FMT;}); }
-  XLSX.utils.book_append_sheet(wb, wsInd, "Indicadores_Mensuales");
+  // ── Hoja Indicadores mensuales ──
+  const wsI = wb.addWorksheet("Indicadores_Mensuales");
+  wsI.columns = [{width:10},{width:15},{width:15},{width:14},{width:14},{width:15},{width:13},{width:14}];
+  let ri = await _xlsEncabezado(wsI, wb, "INDICADORES MENSUALES", "Evolución por período");
+  const hI = wsI.getRow(ri);
+  ["Período","Ventas netas","Facturación","IVA débito","Compras base","Compras total","IVA crédito","IVA preliminar"].forEach((h,i)=>{ hI.getCell(i+1).value=h; _xlsHeader(hI.getCell(i+1)); }); ri++;
+  mesesOrd.forEach(m => { const b=meses[m]; const row=wsI.getRow(ri);
+    row.getCell(1).value=m; setMoney(row.getCell(2),b.ventasNeto); setMoney(row.getCell(3),b.facturacion);
+    setMoney(row.getCell(4),b.ivaDebito); setMoney(row.getCell(5),b.comprasBase); setMoney(row.getCell(6),b.comprasTotal);
+    setMoney(row.getCell(7),b.ivaCredito); setMoney(row.getCell(8),b.ivaDebito-b.ivaCredito); ri++;
+  });
 
-  // Hoja Posición IVA (detalle del último mes)
-  const posiva = [["POSICIÓN DE IVA — "+(ultMes||"")],[],
-    ["Concepto","Monto"],
-    ["IVA débito (ventas)", u.ivaDebito],
-    ["IVA crédito (compras)", u.ivaCredito],
-    ["Retenciones/percepciones IVA", retIVA],
-    ["POSICIÓN (débito − crédito − ret.)", ivaPreliminar],
-  ];
-  const wsPos = XLSX.utils.aoa_to_sheet(posiva);
-  wsPos["!cols"] = [{wch:36},{wch:16}];
-  for (let R=4;R<=7;R++){ const c=wsPos["B"+R]; if(c) c.z=MONEY_FMT; }
-  XLSX.utils.book_append_sheet(wb, wsPos, "Posicion_IVA");
+  // ── Hoja Posición IVA ──
+  const wsP = wb.addWorksheet("Posicion_IVA");
+  wsP.columns = [{width:38},{width:16}];
+  let rp = await _xlsEncabezado(wsP, wb, "POSICIÓN DE IVA", ultMes || "");
+  const hP = wsP.getRow(rp); hP.getCell(1).value="Concepto"; hP.getCell(2).value="Monto"; _xlsHeader(hP.getCell(1)); _xlsHeader(hP.getCell(2)); rp++;
+  [["IVA débito (ventas)",u.ivaDebito],["IVA crédito computable (compras)",u.ivaCredito],["Retenciones/percepciones IVA",retIVA]].forEach(([t,v])=>{ const row=wsP.getRow(rp); row.getCell(1).value=t; setMoney(row.getCell(2),v); rp++; });
+  const rPos = wsP.getRow(rp); rPos.getCell(1).value="POSICIÓN (débito − crédito − ret.)"; _xlsResult(rPos.getCell(1)); setMoney(rPos.getCell(2), ivaPreliminar); _xlsResult(rPos.getCell(2));
 
-  // Hoja Recomendaciones (reusa el motor de análisis si existe)
-  const recRows = [["RECOMENDACIONES DEL MODELO"],["Requieren aprobación profesional"],[],
-    ["Variable","Condición","Diagnóstico","Recomendación","Prioridad","Evidencia"]];
-  if (typeof calcularFiscal === "function" && typeof recomendacionesFiscales === "function" && typeof estimarGanancias === "function") {
+  // ── Hoja Recomendaciones ──
+  const wsR = wb.addWorksheet("Recomendaciones");
+  wsR.columns = [{width:12},{width:22},{width:40},{width:42},{width:12},{width:32}];
+  let rr = await _xlsEncabezado(wsR, wb, "RECOMENDACIONES DEL MODELO", "Requieren aprobación profesional");
+  const hR = wsR.getRow(rr); ["Variable","Condición","Diagnóstico","Recomendación","Prioridad","Evidencia"].forEach((h,i)=>{ hR.getCell(i+1).value=h; _xlsHeader(hR.getCell(i+1)); }); rr++;
+  if (typeof calcularFiscal==="function" && typeof recomendacionesFiscales==="function" && typeof estimarGanancias==="function") {
     const f = calcularFiscal("1900-01-01","2100-12-31");
-    const recs = recomendacionesFiscales(f, estimarGanancias(f));
-    recs.forEach(r => recRows.push([r.variable, r.condicion, r.diagnostico, r.accion, r.prioridad, (r.evidencia||[]).join(", ")]));
+    recomendacionesFiscales(f, estimarGanancias(f)).forEach(rec => {
+      const row = wsR.getRow(rr);
+      row.getCell(1).value=rec.variable; row.getCell(2).value=rec.condicion; row.getCell(3).value=rec.diagnostico;
+      row.getCell(4).value=rec.accion; row.getCell(5).value=rec.prioridad; row.getCell(6).value=(rec.evidencia||[]).join(", ");
+      row.alignment = { wrapText:true, vertical:"top" };
+      rr++;
+    });
   }
-  const wsRec = XLSX.utils.aoa_to_sheet(recRows);
-  wsRec["!cols"] = [{wch:12},{wch:22},{wch:38},{wch:40},{wch:12},{wch:30}];
-  XLSX.utils.book_append_sheet(wb, wsRec, "Recomendaciones");
 
-  // Hoja Metodología
-  const met = [["METODOLOGÍA Y LIMITACIONES"],[],["Concepto","Definición"],
-    ["Ventas netas","Neto gravado + no gravado + exento de comprobantes emitidos."],
-    ["Compras base","Neto gravado + no gravado + exento de comprobantes recibidos."],
-    ["IVA débito","IVA de comprobantes de venta."],
-    ["IVA crédito","IVA de comprobantes de compra (potencial hasta validación profesional)."],
-    ["IVA preliminar","IVA débito − IVA crédito − retenciones/percepciones IVA."],
-    ["Resultado documental","Ventas netas − compras base. NO es la base imponible de Ganancias."],
-    ["Ganancias","Requiere puente contable-fiscal (balance, ajustes, amortizaciones, quebrantos)."],
-  ];
-  const wsMet = XLSX.utils.aoa_to_sheet(met);
-  wsMet["!cols"] = [{wch:22},{wch:70}];
-  XLSX.utils.book_append_sheet(wb, wsMet, "Metodologia");
+  // ── Hoja Metodología ──
+  const wsM = wb.addWorksheet("Metodologia");
+  wsM.columns = [{width:22},{width:72}];
+  let rm = await _xlsEncabezado(wsM, wb, "METODOLOGÍA Y LIMITACIONES", "");
+  const hM = wsM.getRow(rm); hM.getCell(1).value="Concepto"; hM.getCell(2).value="Definición"; _xlsHeader(hM.getCell(1)); _xlsHeader(hM.getCell(2)); rm++;
+  [["Ventas netas","Neto gravado + no gravado + exento de comprobantes emitidos."],
+   ["Compras base","Neto gravado + no gravado + exento de comprobantes recibidos."],
+   ["IVA débito","IVA de comprobantes de venta."],
+   ["IVA crédito","IVA de compras validadas como computables (no se computa por defecto)."],
+   ["IVA preliminar","IVA débito − IVA crédito computable − retenciones/percepciones IVA del período."],
+   ["Resultado documental","Ventas netas − compras base. NO es la base imponible de Ganancias."],
+   ["Ganancias","Requiere puente contable-fiscal (balance, ajustes, amortizaciones, quebrantos)."]
+  ].forEach(([c,d])=>{ const row=wsM.getRow(rm); row.getCell(1).value=c; row.getCell(1).font={bold:true}; row.getCell(2).value=d; row.getCell(2).alignment={wrapText:true}; rm++; });
 
-  XLSX.writeFile(wb, `Reporte_Fiscal_Financiero_${_hoyTxt().replace(/\//g,"-")}.xlsx`);
+  await _xlsSave(wb, `Reporte_Fiscal_Financiero_${_hoyTxt().replace(/\//g,"-")}.xlsx`);
 }
