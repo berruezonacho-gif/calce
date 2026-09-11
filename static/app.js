@@ -2776,8 +2776,11 @@ function openAfipModal(data) {
         <input type="checkbox" id="afip-imp-comp">
         <span><b>Cargar las ${r.comprobantes} facturas</b> como cuentas por pagar (con IVA discriminado)</span>
       </label>
+      <label class="afip-choice">
+        <input type="checkbox" id="afip-imp-psaldado" checked>
+        <span><b>Marcar como pagadas las ya vencidas</b> — las facturas viejas entran como saldadas, no como pendientes</span>
+      </label>
     </div>
-    <p class="afip-warn" id="afip-comp-warn" style="display:none">⚠️ Son muchas facturas. Se cargarán todas como pendientes de pago — revisá los vencimientos después.</p>
 
     <details class="afip-preview">
       <summary>Ver los primeros proveedores</summary>
@@ -2789,9 +2792,6 @@ function openAfipModal(data) {
       </table>
     </details>`;
 
-  $("#afip-imp-comp").onchange = (ev) => {
-    $("#afip-comp-warn").style.display = ev.target.checked ? "" : "none";
-  };
   const cb = $("#afip-modal-confirm"); if (cb) cb.onclick = confirmarAfip;
   const t = $("#afip-modal-title"); if (t) t.textContent = "Importar compras de AFIP";
   $("#afip-modal").classList.remove("hidden");
@@ -2819,11 +2819,14 @@ function confirmarAfip() {
   }
 
   if (impComp) {
+    const marcarSaldadas = $("#afip-imp-psaldado")?.checked;
+    const hoy = new Date().toISOString().slice(0,10);
     const cuentaDefault = state.accounts.find(a => a.moneda === "ARS" && a.tipo !== "efectivo" && a.tipo !== "comitente")?.id
       || state.accounts[0]?.id;
     _afipData.comprobantes.forEach(c => {
       // Vencimiento estimado: emisión + 30 días (AFIP no trae fecha de pago)
       const venc = c.emision ? addDaysToISO(c.emision, 30) : new Date().toISOString().slice(0,10);
+      const yaVencida = marcarSaldadas && venc < hoy;
       const comp = {
         id: compId(), tipo: "pagar", contraparte: c.contraparte,
         cuit: c.cuit, numero: c.numero, tipoComprobante: c.tipoComprobante,
@@ -2831,7 +2834,8 @@ function confirmarAfip() {
         account: cuentaDefault,
         emision: c.emision || new Date().toISOString().slice(0,10),
         vencimiento: venc,
-        categoria: "proveedores", estado: "pendiente",
+        categoria: "proveedores", estado: yaVencida ? "saldado" : "pendiente",
+        fechaSaldado: yaVencida ? venc : null,
         // Impuestos discriminados (de AFIP, sin estimar)
         neto: c.neto, noGravado: c.noGravado, exento: c.exento, iva: c.iva,
         origen: "afip",
@@ -2902,6 +2906,10 @@ function openAfipVentasModal(data) {
         <input type="checkbox" id="afip-imp-vcomp">
         <span><b>Cargar las ${r.comprobantes} facturas</b> como cuentas por cobrar (con IVA discriminado)</span>
       </label>
+      <label class="afip-choice">
+        <input type="checkbox" id="afip-imp-vsaldado" checked>
+        <span><b>Marcar como cobradas las ya vencidas</b> — las facturas viejas (venc. + días ya pasado) entran como saldadas, no como pendientes</span>
+      </label>
     </div>
 
     <details class="afip-preview">
@@ -2941,10 +2949,13 @@ function confirmarAfipVentas() {
   }
 
   if (impComp) {
+    const marcarSaldadas = $("#afip-imp-vsaldado")?.checked;
+    const hoy = new Date().toISOString().slice(0,10);
     const cuentaDefault = state.accounts.find(a => a.moneda === "ARS" && a.tipo !== "efectivo" && a.tipo !== "comitente")?.id
       || state.accounts[0]?.id;
     _afipVentasData.comprobantes.forEach(c => {
       const venc = c.emision ? addDaysToISO(c.emision, 30) : new Date().toISOString().slice(0,10);
+      const yaVencida = marcarSaldadas && venc < hoy;
       const comp = {
         id: compId(), tipo: "cobrar", contraparte: c.contraparte,
         cuit: c.cuit, numero: c.numero, tipoComprobante: c.tipoComprobante,
@@ -2952,7 +2963,8 @@ function confirmarAfipVentas() {
         account: cuentaDefault,
         emision: c.emision || new Date().toISOString().slice(0,10),
         vencimiento: venc,
-        categoria: "ventas", estado: "pendiente",
+        categoria: "ventas", estado: yaVencida ? "saldado" : "pendiente",
+        fechaSaldado: yaVencida ? venc : null,
         neto: c.neto, noGravado: c.noGravado, exento: c.exento, iva: c.iva,
         origen: "afip",
       };
@@ -5695,11 +5707,10 @@ function renderConfig() {
 }
 
 // ── Navegación ───────────────────────────────────────────
-const INV_GROUP = ["inversiones", "excedente", "fci", "mercado"];
+const INV_GROUP = ["inversiones", "excedente", "fci", "mercado", "cartera", "rendimiento", "divisas"];
+const FISCAL_GROUP = ["impuestos", "analisis", "contabilidad", "conciliacion"];
 
 // Modo simple: oculta las secciones avanzadas (marcadas con data-adv).
-// Un consultorio no necesita Bonos, Divisas, FCI detallado, Contabilidad ni
-// Conciliación — se muestran solo en modo "completo".
 function aplicarModoEmpresa() {
   const simple = (state.empresa && state.empresa.modo === "simple");
   document.querySelectorAll("[data-adv]").forEach(el => {
@@ -5710,11 +5721,14 @@ function aplicarModoEmpresa() {
 function switchView(view) {
   $$(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.view === view));
   $$(".nav-sub").forEach((n) => n.classList.toggle("active", n.dataset.view === view));
-  // Marcar el grupo "Inversiones" activo si estamos en una de sus vistas
-  const dropBtn = document.querySelector(".nav-drop-btn");
-  if (dropBtn) dropBtn.classList.toggle("group-active", INV_GROUP.includes(view));
-  // Cerrar el menú
-  document.querySelector(".nav-dropdown")?.classList.remove("open");
+  // Marcar cada dropdown activo si estamos en una de sus vistas
+  $$(".nav-drop-btn").forEach(btn => {
+    const g = btn.dataset.group;
+    const grupo = g === "fiscal" ? FISCAL_GROUP : INV_GROUP;
+    btn.classList.toggle("group-active", grupo.includes(view));
+  });
+  // Cerrar los menús
+  document.querySelectorAll(".nav-dropdown").forEach(d => d.classList.remove("open"));
 
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${view}`).classList.remove("hidden");
@@ -5867,16 +5881,19 @@ function init() {
   $$(".nav-sub").forEach((n) =>
     n.addEventListener("click", () => switchView(n.dataset.view))
   );
-  // Dropdown de Inversiones: abrir/cerrar
-  const dropBtn = document.querySelector(".nav-drop-btn");
-  const dropdown = document.querySelector(".nav-dropdown");
-  if (dropBtn && dropdown) {
-    dropBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      dropdown.classList.toggle("open");
-    });
-    document.addEventListener("click", () => dropdown.classList.remove("open"));
-  }
+  // Dropdowns de nav (Inversiones, Fiscal y contable): abrir/cerrar
+  document.querySelectorAll(".nav-dropdown").forEach(dropdown => {
+    const dropBtn = dropdown.querySelector(".nav-drop-btn");
+    if (dropBtn) {
+      dropBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // Cerrar los otros dropdowns
+        document.querySelectorAll(".nav-dropdown").forEach(d => { if (d !== dropdown) d.classList.remove("open"); });
+        dropdown.classList.toggle("open");
+      });
+    }
+  });
+  document.addEventListener("click", () => document.querySelectorAll(".nav-dropdown").forEach(d => d.classList.remove("open")));
 
   // Toggle día / semana en la tabla
   // Botones rápidos de período

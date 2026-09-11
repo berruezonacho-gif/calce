@@ -26,17 +26,7 @@ const DEMO_CONSULTORIO = {
   ],
 
   // Facturas a cobrar (OSDE) y a pagar (kinesiologos que atienden).
-  comprobantes: [
-    { tipo: "cobrar", contraparte: "OSDE", numero: "0002-00000121", monto: 6656781, neto: 6024236, iva: 632545, account: "cc", emision: "d-12", vencimiento: "d+18", categoria: "ventas", estado: "pendiente" },
-    { tipo: "cobrar", contraparte: "OSDE", numero: "0002-00000122", monto: 6799980, neto: 6153828, iva: 646152, account: "cc", emision: "d-2", vencimiento: "d+38", categoria: "ventas", estado: "pendiente" },
-    { tipo: "cobrar", contraparte: "Obra Social del Personal de Direccion", numero: "0002-00000123", monto: 850000, neto: 850000, iva: 0, account: "cc", emision: "d-6", vencimiento: "d+42", categoria: "ventas", estado: "pendiente" },
-    { tipo: "pagar", contraparte: "Adamec Viviana", numero: "0001-00000340", monto: 1480000, neto: 1480000, iva: 0, account: "cc", emision: "d-6", vencimiento: "d+9", categoria: "subcontratos", estado: "pendiente" },
-    { tipo: "pagar", contraparte: "Capodicasa Claudia", numero: "0001-00000221", monto: 1225000, neto: 1225000, iva: 0, account: "cc", emision: "d-6", vencimiento: "d+9", categoria: "subcontratos", estado: "pendiente" },
-    { tipo: "pagar", contraparte: "Gutierrez Loza Krisol", numero: "0001-00000119", monto: 1075000, neto: 1075000, iva: 0, account: "cc", emision: "d-6", vencimiento: "d+9", categoria: "subcontratos", estado: "pendiente" },
-    { tipo: "pagar", contraparte: "Barrionuevo Natalia", numero: "0001-00000098", monto: 1065000, neto: 1065000, iva: 0, account: "cc", emision: "d-6", vencimiento: "d+9", categoria: "subcontratos", estado: "pendiente" },
-    { tipo: "pagar", contraparte: "Prado Luna", numero: "0001-00000076", monto: 660000, neto: 660000, iva: 0, account: "cc", emision: "d-4", vencimiento: "d+11", categoria: "subcontratos", estado: "pendiente" },
-    { tipo: "pagar", contraparte: "Mongiardini Damian", numero: "0001-00000055", monto: 560000, neto: 560000, iva: 0, account: "cc", emision: "d-4", vencimiento: "d+11", categoria: "subcontratos", estado: "pendiente" },
-  ],
+  comprobantes: (typeof DEMO_COMPROBANTES !== "undefined") ? DEMO_COMPROBANTES : [],
 
   proveedores: [
     { nombre: "Adamec Viviana", cuit: "27-20111222-3", rubro: "Profesional (kinesiologia)", contacto: "Viviana", email: "", telefono: "", cbu: "", condicionIVA: "Monotributista", plazoPago: 15 },

@@ -111,7 +111,7 @@ function renderAnalisisFiscal() {
 
   wrap.innerHTML = `
     <div class="mkt-head"><div class="eyebrow">Análisis del negocio</div>
-      <h2 class="inv-title">Análisis fiscal</h2>
+      <h2 class="inv-title">Resultado económico</h2>
       <p class="inv-sub">Tu posición de IVA, una estimación de Ganancias y recomendaciones para revisar con tu contador.</p></div>
 
     <div class="conta-bar">

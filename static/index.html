@@ -36,10 +36,15 @@
           <button class="nav-sub" data-view="mercado" data-adv>Bonos</button>
         </div>
       </div>
-      <button class="nav-item" data-view="impuestos">Impuestos</button>
-      <button class="nav-item" data-view="analisis">Análisis fiscal</button>
-      <button class="nav-item" data-view="contabilidad">Contabilidad</button>
-      <button class="nav-item" data-view="conciliacion" data-adv>Conciliación</button>
+      <div class="nav-dropdown">
+        <button class="nav-item nav-drop-btn" data-group="fiscal">Fiscal y contable <span class="caret">▾</span></button>
+        <div class="nav-menu">
+          <button class="nav-sub" data-view="impuestos">Impuestos</button>
+          <button class="nav-sub" data-view="analisis">Resultado económico</button>
+          <button class="nav-sub" data-view="contabilidad">Contabilidad</button>
+          <button class="nav-sub" data-view="conciliacion" data-adv>Conciliación</button>
+        </div>
+      </div>
       <button class="nav-item nav-config" data-view="config" title="Configuración">⚙ Configuración</button>
     </nav>
   </header>
@@ -520,6 +525,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script src="/static/bancos.js?v=1"></script>
+  <script src="/static/demo_comprobantes.js?v=1"></script>
   <script src="/static/demo_consultorio.js?v=1"></script>
   <script src="/static/reportes.js?v=1"></script>
   <script src="/static/analisis_fiscal.js?v=1"></script>
