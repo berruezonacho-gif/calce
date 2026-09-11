@@ -37,7 +37,8 @@
         </div>
       </div>
       <button class="nav-item" data-view="impuestos">Impuestos</button>
-      <button class="nav-item" data-view="contabilidad" data-adv>Contabilidad</button>
+      <button class="nav-item" data-view="analisis">Análisis fiscal</button>
+      <button class="nav-item" data-view="contabilidad">Contabilidad</button>
       <button class="nav-item" data-view="conciliacion" data-adv>Conciliación</button>
       <button class="nav-item nav-config" data-view="config" title="Configuración">⚙ Configuración</button>
     </nav>
@@ -177,6 +178,11 @@
     <!-- Vista Impuestos -->
     <section class="view hidden" id="view-impuestos">
       <div class="imp-wrap" id="imp-wrap"></div>
+    </section>
+
+    <!-- Vista Análisis fiscal (posición IVA + Ganancias + recomendaciones) -->
+    <section class="view hidden" id="view-analisis">
+      <div class="analisis-wrap" id="analisis-wrap"></div>
     </section>
 
     <!-- Vista Contabilidad (Estado de Resultados + Sumas y Saldos) -->
@@ -516,6 +522,7 @@
   <script src="/static/bancos.js?v=1"></script>
   <script src="/static/demo_consultorio.js?v=1"></script>
   <script src="/static/reportes.js?v=1"></script>
+  <script src="/static/analisis_fiscal.js?v=1"></script>
   <script src="/static/app.js?v=1"></script>
 </body>
 </html>

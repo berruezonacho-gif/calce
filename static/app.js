@@ -29,6 +29,7 @@ const state = {
   empresa: { nombre: "", cuit: "", provincia: "", modo: "completo" },
   prefs: { moneda: "ARS", formatoFecha: "dd/mm/aa", colchon: 200000, horizonte: 90 },
   impuestos: { iva: 21, iibb: 3 },
+  ganAjustes: [], // ajustes cargables para estimar Ganancias (amortizaciones, quebrantos, etc.)
   result: null,
   cfAccount: "",
   cfCurrency: "ARS", // moneda activa del flujo (ARS / USD)
@@ -218,6 +219,7 @@ function saveState() {
         comprobantes: state.comprobantes,
         proveedores: state.proveedores,
         clientes: state.clientes,
+        ganAjustes: state.ganAjustes,
         impMontos: state.impMontos,
         retenciones: state.retenciones,
         accounts: state.accounts,
@@ -241,6 +243,7 @@ function loadState() {
     if (s.comprobantes) state.comprobantes = s.comprobantes;
     if (s.proveedores) state.proveedores = s.proveedores;
     if (s.clientes) state.clientes = s.clientes;
+    if (s.ganAjustes) state.ganAjustes = s.ganAjustes;
     if (s.impMontos) state.impMontos = s.impMontos;
     if (s.retenciones) state.retenciones = s.retenciones;
     if (s.accounts) state.accounts = s.accounts;
@@ -5166,6 +5169,8 @@ function renderImpuestos() {
       <h2 class="inv-title">Impuestos</h2>
       <p class="inv-sub">Tu calendario de vencimientos impositivos y un estimador de cuánto vas a pagar. Los vencimientos se pueden llevar al flujo de caja.</p></div>
 
+    <div id="imp-posicion-iva"></div>
+
     <div id="imp-calendario"></div>
 
     <div id="imp-retenciones"></div>
@@ -5190,6 +5195,7 @@ function renderImpuestos() {
       <div class="imp-result" id="imp-result"><div class="inv-placeholder">Cargá tus operaciones y calculá.</div></div>
     </div>`;
 
+  renderPosicionIVA();
   renderCalendarioImpuestos();
   renderRetenciones();
 
@@ -5721,6 +5727,7 @@ function switchView(view) {
   if (view === "fci") renderFCI();
   if (view === "impuestos") renderImpuestos();
   if (view === "contabilidad") renderContabilidad();
+  if (view === "analisis") renderAnalisisFiscal();
   if (view === "conciliacion") renderConciliacion();
   if (view === "config") renderConfig();
 }
