@@ -2680,7 +2680,7 @@ function renderComprobantes() {
         <button class="btn-primary" id="comp-add">+ Nueva factura</button>
       </div>
     </div>
-    <input type="file" id="afip-file" accept=".xlsx,.xlsm" style="display:none">
+    <input type="file" id="afip-file" accept=".xlsx,.xlsm,.csv" style="display:none">
 
     <div class="comp-tabs">
       <button class="comp-tab ${esCobrar?"active":""}" data-tab="cobrar">Por cobrar</button>
@@ -3005,7 +3005,7 @@ function renderClientes(wrap) {
         <button class="btn-primary" id="cli-add">+ Nuevo cliente</button>
       </div>
     </div>
-    <input type="file" id="afip-file" accept=".xlsx,.xlsm" style="display:none">
+    <input type="file" id="afip-file" accept=".xlsx,.xlsm,.csv" style="display:none">
 
     <div class="comp-tabs">
       <button class="comp-tab" data-tab="cobrar">Por cobrar</button>

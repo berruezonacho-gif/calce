@@ -321,13 +321,15 @@ def parse_libro_iva(content: bytes, filename: str = "") -> dict:
     compra (a pagar) con los importes discriminados: neto, no gravado,
     exento, IVA y total.
     """
-    if not (filename.lower().endswith((".xlsx", ".xlsm"))):
-        return {"ok": False, "error": "El Libro IVA de AFIP tiene que ser un Excel (.xlsx)."}
+    fn = filename.lower()
+    es_csv = fn.endswith(".csv")
+    if not (fn.endswith((".xlsx", ".xlsm")) or es_csv):
+        return {"ok": False, "error": "El Libro IVA de AFIP tiene que ser un Excel (.xlsx) o CSV de ARCA."}
 
     try:
-        sheet = _liva_best_sheet(content)
+        sheet = _liva_sheet_from_csv(content) if es_csv else _liva_best_sheet(content)
     except Exception as e:
-        return {"ok": False, "error": f"No se pudo leer el Excel: {e}"}
+        return {"ok": False, "error": f"No se pudo leer el archivo: {e}"}
     if not sheet:
         return {"ok": False, "error": "No reconocí el formato del Libro IVA. Verificá que sea el export de AFIP con columnas de proveedor e IVA."}
 
@@ -474,6 +476,23 @@ _RET_IMPORTE= {"importe ret perc", "importe", "importe retencion"}
 _RET_CERT   = {"numero certificado", "certificado", "nro certificado"}
 
 
+def _rows_from_spreadsheetml(content: bytes) -> list[list]:
+    """Lee un .xls que en realidad es SpreadsheetML (XML de Excel 2003),
+    formato que usan algunos exports de ARCA (IMP_PER_RET)."""
+    import xml.etree.ElementTree as ET
+    NS = "{urn:schemas-microsoft-com:office:spreadsheet}"
+    text = content.decode("utf-8", errors="replace")
+    root = ET.fromstring(text)
+    rows = []
+    for row in root.iter(NS + "Row"):
+        cells = []
+        for cell in row.iter(NS + "Cell"):
+            data = cell.find(NS + "Data")
+            cells.append(data.text if data is not None else "")
+        rows.append(cells)
+    return rows
+
+
 def parse_retenciones(content: bytes, filename: str = "") -> dict:
     """Parsea un export de 'Mis Retenciones y Percepciones' de AFIP.
 
@@ -484,7 +503,12 @@ def parse_retenciones(content: bytes, filename: str = "") -> dict:
     fn = filename.lower()
     try:
         if fn.endswith(".xls"):
-            rows = _rows_from_xls(content)
+            # Algunos .xls de ARCA son en realidad SpreadsheetML (XML), no binario.
+            head = content[:200].lstrip()
+            if head.startswith(b"<?xml") or b"<Workbook" in content[:600]:
+                rows = _rows_from_spreadsheetml(content)
+            else:
+                rows = _rows_from_xls(content)
         elif fn.endswith((".xlsx", ".xlsm")):
             # Puede tener varias hojas; buscar la que tenga los datos
             from openpyxl import load_workbook
@@ -581,6 +605,46 @@ def parse_retenciones(content: bytes, filename: str = "") -> dict:
     }
 
 
+def _liva_sheet_from_csv(content: bytes):
+    """Lee un CSV de ARCA ('Mis Comprobantes' export, separado por ;) y lo
+    devuelve con la misma estructura que _liva_best_sheet: {title, header_row, rows}.
+    Sirve tanto para emitidos como recibidos (el detector de columnas decide)."""
+    # Encoding: ARCA suele exportar en latin-1/utf-8; probar ambos
+    text = None
+    for enc in ("utf-8-sig", "latin-1"):
+        try:
+            text = content.decode(enc)
+            break
+        except Exception:
+            continue
+    if text is None:
+        return None
+    lines = text.splitlines()
+    if not lines:
+        return None
+    # Separador: ; si aparece más que , en la primera línea
+    first = lines[0]
+    sep = ";" if first.count(";") >= first.count(",") else ","
+    rows = []
+    for ln in lines:
+        # split simple respetando comillas
+        cells = []
+        cur = ""
+        inq = False
+        for ch in ln:
+            if ch == '"':
+                inq = not inq
+            elif ch == sep and not inq:
+                cells.append(cur); cur = ""
+            else:
+                cur += ch
+        cells.append(cur)
+        rows.append([c.strip().strip('"') for c in cells])
+    if len(rows) < 2:
+        return None
+    return {"title": "CSV", "header_row": 0, "rows": rows}
+
+
 def parse_libro_iva_ventas(content: bytes, filename: str = "") -> dict:
     """Parsea el Libro IVA Ventas de AFIP ("Mis Comprobantes Emitidos").
 
@@ -588,13 +652,15 @@ def parse_libro_iva_ventas(content: bytes, filename: str = "") -> dict:
     son del COMPRADOR (receptor). Devuelve clientes únicos y comprobantes a
     cobrar con IVA débito fiscal discriminado.
     """
-    if not (filename.lower().endswith((".xlsx", ".xlsm"))):
-        return {"ok": False, "error": "El Libro IVA Ventas de AFIP tiene que ser un Excel (.xlsx)."}
+    fn = filename.lower()
+    es_csv = fn.endswith(".csv")
+    if not (fn.endswith((".xlsx", ".xlsm")) or es_csv):
+        return {"ok": False, "error": "El Libro IVA Ventas de AFIP tiene que ser un Excel (.xlsx) o CSV de ARCA."}
 
     try:
-        sheet = _liva_best_sheet(content, use_ventas=True)
+        sheet = _liva_sheet_from_csv(content) if es_csv else _liva_best_sheet(content, use_ventas=True)
     except Exception as e:
-        return {"ok": False, "error": f"No se pudo leer el Excel: {e}"}
+        return {"ok": False, "error": f"No se pudo leer el archivo: {e}"}
     if not sheet:
         return {"ok": False, "error": "No reconocí el formato del Libro IVA Ventas. Verificá que sea el export de AFIP con columnas de cliente e IVA."}
 
