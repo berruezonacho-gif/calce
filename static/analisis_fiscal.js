@@ -26,10 +26,9 @@ function calcularFiscal(from, to) {
   // IVA
   const ivaDebito = ventas.reduce((s,c) => s + (c.iva || 0), 0);          // IVA de ventas
   const ivaCreditoPotencial = compras.reduce((s,c) => s + (c.iva || 0), 0); // IVA de compras (potencial)
-  // Solo computa el crédito de compras marcadas como computables (vat_computable).
-  // Por defecto en Calce no distinguimos, así que tomamos todo como computable
-  // pero lo señalamos en la recomendación (igual que el backend).
-  const ivaCreditoValidado = compras.reduce((s,c) => s + ((c.ivaComputable !== false) ? (c.iva || 0) : 0), 0);
+  // Criterio prudente: el crédito NO se computa hasta que se valide
+  // explícitamente (c.ivaComputable === true). Nunca por ausencia de dato.
+  const ivaCreditoValidado = compras.reduce((s,c) => s + ((c.ivaComputable === true) ? (c.iva || 0) : 0), 0);
   // Retenciones/percepciones de IVA sufridas en el período
   const rets = (state.retenciones || []).filter(r => dentro(r.fecha));
   const ivaRetPerc = rets.filter(r => (r.impuesto||"").toUpperCase().includes("IVA")).reduce((s,r) => s + (r.importe||0), 0);
@@ -121,6 +120,7 @@ function renderAnalisisFiscal() {
         <button class="cper ${anPeriodo==="anio"?"active":""}" data-anper="anio">Este año</button>
         <button class="cper ${anPeriodo==="todo"?"active":""}" data-anper="todo">Todo</button>
       </div>
+      <button class="btn-primary sm" id="af-report">↓ Reporte fiscal-financiero (Excel)</button>
     </div>
 
     <!-- Posición de IVA -->
@@ -128,14 +128,14 @@ function renderAnalisisFiscal() {
       <h3>Posición de IVA · ${h(label)}</h3>
       <div class="af-ivalist">
         <div class="af-ivarow"><span>IVA débito (ventas)</span><b class="out">${money(fiscal.ivaDebito)}</b></div>
-        <div class="af-ivarow"><span>− IVA crédito (compras)</span><b class="in">−${money(fiscal.ivaCreditoValidado)}</b></div>
+        <div class="af-ivarow"><span>− IVA crédito computable (compras validadas)</span><b class="in">−${money(fiscal.ivaCreditoValidado)}</b></div>
         <div class="af-ivarow"><span>− Retenciones/percepciones IVA</span><b class="in">−${money(fiscal.ivaRetPerc)}</b></div>
         <div class="af-ivarow total ${fiscal.posicionIVA>0?'pos':'neg'}">
           <span>${fiscal.posicionIVA>0?'Posición a PAGAR':'Saldo a FAVOR'}</span>
           <b>${money(Math.abs(fiscal.posicionIVA))}</b>
         </div>
       </div>
-      ${fiscal.ivaCreditoPotencial > fiscal.ivaCreditoValidado ? `<p class="af-warn">⚠ Hay ${money(fiscal.ivaCreditoPotencial - fiscal.ivaCreditoValidado)} de IVA crédito potencial sin validar. Se computa por defecto — revisalo con tu contador.</p>` : ""}
+      ${fiscal.ivaCreditoPotencial > fiscal.ivaCreditoValidado ? `<p class="af-warn">⚠ Hay ${money(fiscal.ivaCreditoPotencial - fiscal.ivaCreditoValidado)} de IVA crédito <b>potencial sin validar</b>. No se computa hasta que el contador confirme que cada factura es computable (vinculación, titularidad, período).</p>` : ""}
     </div>
 
     <!-- Estimación de Ganancias -->
@@ -175,6 +175,8 @@ function renderAnalisisFiscal() {
     </div>`;
 
   $$("[data-anper]").forEach(b => b.onclick = () => { anPeriodo = b.dataset.anper; renderAnalisisFiscal(); });
+  const repBtn = $("#af-report");
+  if (repBtn) repBtn.onclick = () => { if (typeof exportarReporteFiscalExcel === "function") exportarReporteFiscalExcel(); else alert("Reporte no disponible."); };
   renderGanAjustes();
   const addBtn = $("#af-add-ajuste");
   if (addBtn) addBtn.onclick = () => {

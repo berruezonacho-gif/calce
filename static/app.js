@@ -550,6 +550,8 @@ function loadDemoDataset(ds) {
       emision: relDate(raw.emision), vencimiento: relDate(raw.vencimiento),
       categoria: raw.categoria, estado: raw.estado || "pendiente",
       fechaSaldado: raw.fechaSaldado ? relDate(raw.fechaSaldado) : null,
+      neto: raw.neto, iva: raw.iva, noGravado: raw.noGravado, exento: raw.exento,
+      cuit: raw.cuit, tipoComprobante: raw.tipoComprobante,
     };
     state.comprobantes.push(comp);
     generarMovComprobante(comp);

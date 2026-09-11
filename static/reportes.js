@@ -344,3 +344,116 @@ function exportarSumasSaldosPdf(cuentas, label) {
   doc.text("Patrimonio/Capital inicial. Es una vista de gestión, no un balance contable legal.", 50, fy+29);
   doc.save(`Sumas_y_Saldos_${label.replace(/\s+/g,"_")}.pdf`);
 }
+
+// ════════════════════════════════════════════════════════════════
+// 5. REPORTE FISCAL-FINANCIERO (multi-hoja, estilo Copilot)
+// ════════════════════════════════════════════════════════════════
+// Consolida ventas, compras, IVA, retenciones y caja en un Excel de
+// varias hojas: Dashboard, Indicadores mensuales, Posición IVA,
+// Recomendaciones, Metodología. Datos de state (comprobantes/retenciones).
+
+function _mesDe(iso) { return iso ? iso.slice(0,7) : ""; }
+
+function exportarReporteFiscalExcel() {
+  const emp = _emp();
+  const comps = state.comprobantes || [];
+  const rets = state.retenciones || [];
+  const ventas = comps.filter(c => c.tipo === "cobrar");
+  const compras = comps.filter(c => c.tipo === "pagar");
+
+  // ── Indicadores mensuales ──
+  const meses = {};
+  const bucket = (m) => (meses[m] = meses[m] || { ventasNeto:0, facturacion:0, ivaDebito:0, comprasBase:0, comprasTotal:0, ivaCredito:0 });
+  ventas.forEach(c => { const m=_mesDe(c.emision); if(!m)return; const b=bucket(m); b.ventasNeto+=(c.neto||0); b.facturacion+=(c.monto||0); b.ivaDebito+=(c.iva||0); });
+  compras.forEach(c => { const m=_mesDe(c.emision); if(!m)return; const b=bucket(m); b.comprasBase+=(c.neto||0); b.comprasTotal+=(c.monto||0); b.ivaCredito+=(c.iva||0); });
+  const mesesOrd = Object.keys(meses).sort();
+
+  // ── Totales / último mes ──
+  const ultMes = mesesOrd[mesesOrd.length-1];
+  const u = ultMes ? meses[ultMes] : { ventasNeto:0,facturacion:0,ivaDebito:0,ivaCredito:0 };
+  // Retenciones/percepciones de IVA DEL MISMO MES (no de todo el historial)
+  const retIVA = rets.filter(r => (r.impuesto||"").toUpperCase().includes("IVA") && _mesDe(r.fecha) === ultMes).reduce((s,r)=>s+(r.importe||0),0);
+  const ivaPreliminar = u.ivaDebito - u.ivaCredito - retIVA;
+  const totalVentasNeto = ventas.reduce((s,c)=>s+(c.neto||0),0);
+  const totalComprasBase = compras.reduce((s,c)=>s+(c.neto||0),0);
+  const resultadoDoc = totalVentasNeto - totalComprasBase;
+
+  const wb = XLSX.utils.book_new();
+
+  // Hoja Dashboard
+  const dash = [
+    [`${emp.nombre} — REPORTE FISCAL Y FINANCIERO`],
+    [`Generado el ${_hoyTxt()}  ·  CUIT ${emp.cuit||"—"}`],
+    [],
+    ["Ventas netas (últ. mes)", u.ventasNeto],
+    ["Facturación (últ. mes)", u.facturacion],
+    ["IVA débito (últ. mes)", u.ivaDebito],
+    ["IVA crédito (últ. mes)", u.ivaCredito],
+    ["Retenciones/percepciones IVA", retIVA],
+    ["IVA preliminar", ivaPreliminar],
+    [],
+    ["Resultado documental (total)", resultadoDoc],
+    ["Comprobantes emitidos", ventas.length],
+    ["Comprobantes recibidos", compras.length],
+    [],
+    ["Lectura ejecutiva"],
+    [ivaPreliminar > 0 ? "• IVA preliminar a pagar en el período (validar créditos con el contador)." : "• Saldo de IVA a favor en el período."],
+    ["• Las ventas netas documentadas surgen del Libro IVA."],
+    ["• El resultado documental NO es la base imponible de Ganancias."],
+    ["• La caja se muestra según lo cargado; requiere conciliación bancaria."],
+  ];
+  const wsDash = XLSX.utils.aoa_to_sheet(dash);
+  wsDash["!cols"] = [{wch:32},{wch:18}];
+  for (let R=4;R<=13;R++){ const c=wsDash["B"+R]; if(c&&typeof c.v==="number") c.z=MONEY_FMT; }
+  XLSX.utils.book_append_sheet(wb, wsDash, "Dashboard");
+
+  // Hoja Indicadores mensuales
+  const ind = [["INDICADORES MENSUALES"],["Cálculos normalizados por período"],[],
+    ["Período","Ventas netas","Facturación","IVA débito","Compras base","Compras total","IVA crédito","IVA preliminar"]];
+  mesesOrd.forEach(m => { const b=meses[m]; ind.push([m, b.ventasNeto, b.facturacion, b.ivaDebito, b.comprasBase, b.comprasTotal, b.ivaCredito, b.ivaDebito-b.ivaCredito]); });
+  const wsInd = XLSX.utils.aoa_to_sheet(ind);
+  wsInd["!cols"] = [{wch:10},{wch:14},{wch:14},{wch:13},{wch:13},{wch:14},{wch:12},{wch:13}];
+  for (let R=5;R<ind.length+1;R++){ ["B","C","D","E","F","G","H"].forEach(col=>{const c=wsInd[col+R]; if(c) c.z=MONEY_FMT;}); }
+  XLSX.utils.book_append_sheet(wb, wsInd, "Indicadores_Mensuales");
+
+  // Hoja Posición IVA (detalle del último mes)
+  const posiva = [["POSICIÓN DE IVA — "+(ultMes||"")],[],
+    ["Concepto","Monto"],
+    ["IVA débito (ventas)", u.ivaDebito],
+    ["IVA crédito (compras)", u.ivaCredito],
+    ["Retenciones/percepciones IVA", retIVA],
+    ["POSICIÓN (débito − crédito − ret.)", ivaPreliminar],
+  ];
+  const wsPos = XLSX.utils.aoa_to_sheet(posiva);
+  wsPos["!cols"] = [{wch:36},{wch:16}];
+  for (let R=4;R<=7;R++){ const c=wsPos["B"+R]; if(c) c.z=MONEY_FMT; }
+  XLSX.utils.book_append_sheet(wb, wsPos, "Posicion_IVA");
+
+  // Hoja Recomendaciones (reusa el motor de análisis si existe)
+  const recRows = [["RECOMENDACIONES DEL MODELO"],["Requieren aprobación profesional"],[],
+    ["Variable","Condición","Diagnóstico","Recomendación","Prioridad","Evidencia"]];
+  if (typeof calcularFiscal === "function" && typeof recomendacionesFiscales === "function" && typeof estimarGanancias === "function") {
+    const f = calcularFiscal("1900-01-01","2100-12-31");
+    const recs = recomendacionesFiscales(f, estimarGanancias(f));
+    recs.forEach(r => recRows.push([r.variable, r.condicion, r.diagnostico, r.accion, r.prioridad, (r.evidencia||[]).join(", ")]));
+  }
+  const wsRec = XLSX.utils.aoa_to_sheet(recRows);
+  wsRec["!cols"] = [{wch:12},{wch:22},{wch:38},{wch:40},{wch:12},{wch:30}];
+  XLSX.utils.book_append_sheet(wb, wsRec, "Recomendaciones");
+
+  // Hoja Metodología
+  const met = [["METODOLOGÍA Y LIMITACIONES"],[],["Concepto","Definición"],
+    ["Ventas netas","Neto gravado + no gravado + exento de comprobantes emitidos."],
+    ["Compras base","Neto gravado + no gravado + exento de comprobantes recibidos."],
+    ["IVA débito","IVA de comprobantes de venta."],
+    ["IVA crédito","IVA de comprobantes de compra (potencial hasta validación profesional)."],
+    ["IVA preliminar","IVA débito − IVA crédito − retenciones/percepciones IVA."],
+    ["Resultado documental","Ventas netas − compras base. NO es la base imponible de Ganancias."],
+    ["Ganancias","Requiere puente contable-fiscal (balance, ajustes, amortizaciones, quebrantos)."],
+  ];
+  const wsMet = XLSX.utils.aoa_to_sheet(met);
+  wsMet["!cols"] = [{wch:22},{wch:70}];
+  XLSX.utils.book_append_sheet(wb, wsMet, "Metodologia");
+
+  XLSX.writeFile(wb, `Reporte_Fiscal_Financiero_${_hoyTxt().replace(/\//g,"-")}.xlsx`);
+}
