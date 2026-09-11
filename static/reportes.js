@@ -387,9 +387,9 @@ async function exportarReporteFiscalExcel() {
 
   // Indicadores mensuales
   const meses = {};
-  const bucket = (m) => (meses[m] = meses[m] || { ventasNeto:0, facturacion:0, ivaDebito:0, comprasBase:0, comprasTotal:0, ivaCredito:0 });
-  ventas.forEach(c => { const m=_mesDe(c.emision); if(!m)return; const b=bucket(m); b.ventasNeto+=(c.neto||0); b.facturacion+=(c.monto||0); b.ivaDebito+=(c.iva||0); });
-  compras.forEach(c => { const m=_mesDe(c.emision); if(!m)return; const b=bucket(m); b.comprasBase+=(c.neto||0); b.comprasTotal+=(c.monto||0); b.ivaCredito+=(c.iva||0); });
+  const bucket = (m) => (meses[m] = meses[m] || { ventasNeto:0, facturacion:0, ivaDebito:0, comprasBase:0, comprasTotal:0, ivaCredito:0, nV:0, nC:0 });
+  ventas.forEach(c => { const m=_mesDe(c.emision); if(!m)return; const b=bucket(m); b.ventasNeto+=(c.neto||0); b.facturacion+=(c.monto||0); b.ivaDebito+=(c.iva||0); b.nV++; });
+  compras.forEach(c => { const m=_mesDe(c.emision); if(!m)return; const b=bucket(m); b.comprasBase+=(c.neto||0); b.comprasTotal+=(c.monto||0); b.ivaCredito+=(c.iva||0); b.nC++; });
   const mesesOrd = Object.keys(meses).sort();
   const ultMes = mesesOrd[mesesOrd.length-1];
   const u = ultMes ? meses[ultMes] : { ventasNeto:0,facturacion:0,ivaDebito:0,ivaCredito:0 };
@@ -398,81 +398,185 @@ async function exportarReporteFiscalExcel() {
   const totalVentasNeto = ventas.reduce((s,c)=>s+(c.neto||0),0);
   const totalComprasBase = compras.reduce((s,c)=>s+(c.neto||0),0);
   const resultadoDoc = totalVentasNeto - totalComprasBase;
+  // Variación interanual (mismo mes año anterior)
+  let varInter = null;
+  if (ultMes) {
+    const [y,m] = ultMes.split("-");
+    const prevKey = `${parseInt(y)-1}-${m}`;
+    if (meses[prevKey] && meses[prevKey].ventasNeto > 0) varInter = (u.ventasNeto - meses[prevKey].ventasNeto) / meses[prevKey].ventasNeto;
+  }
 
   const wb = new ExcelJS.Workbook();
   const setMoney = (cell, v) => { cell.value = v; cell.numFmt = XLS_MONEY; cell.alignment = { horizontal: "right" }; };
 
-  // ── Hoja Dashboard ──
+  // ═══ Hoja 1: DASHBOARD (con tarjetas de KPI) ═══
   const wsD = wb.addWorksheet("Dashboard");
-  wsD.columns = [{width:34},{width:20}];
-  let r = await _xlsEncabezado(wsD, wb, "REPORTE FISCAL Y FINANCIERO", ultMes ? `Último período: ${ultMes}` : "");
-  const kpi = (txt, v, money=true) => { const row = wsD.getRow(r); row.getCell(1).value = txt; row.getCell(1).font={bold:true,color:{argb:XLS_NAVY}}; if(money) setMoney(row.getCell(2), v); else { row.getCell(2).value=v; row.getCell(2).alignment={horizontal:"right"}; } r++; };
-  kpi("Ventas netas (últ. mes)", u.ventasNeto);
-  kpi("Facturación (últ. mes)", u.facturacion);
-  kpi("IVA débito (últ. mes)", u.ivaDebito);
-  kpi("IVA crédito (últ. mes)", u.ivaCredito);
-  kpi("Retenciones/percepciones IVA", retIVA);
-  const rPre = wsD.getRow(r); rPre.getCell(1).value="IVA preliminar"; _xlsResult(rPre.getCell(1)); setMoney(rPre.getCell(2), ivaPreliminar); _xlsResult(rPre.getCell(2)); r++;
-  r++;
-  kpi("Resultado documental (total)", resultadoDoc);
-  kpi("Comprobantes emitidos", ventas.length, false);
-  kpi("Comprobantes recibidos", compras.length, false);
-  r++;
-  const rLect = wsD.getRow(r); rLect.getCell(1).value = "Lectura ejecutiva"; _xlsSection(rLect.getCell(1)); _xlsSection(rLect.getCell(2)); r++;
-  [ (ivaPreliminar>0?"• IVA preliminar a pagar en el período (validar créditos con el contador).":"• Saldo de IVA a favor en el período."),
-    "• Las ventas netas documentadas surgen del Libro IVA.",
-    "• El resultado documental NO es la base imponible de Ganancias.",
-    "• La caja requiere conciliación bancaria." ].forEach(t => { wsD.getRow(r).getCell(1).value=t; wsD.getRow(r).getCell(1).font={size:10,color:{argb:"FF444444"}}; r++; });
+  wsD.columns = [{width:30},{width:20},{width:4},{width:30},{width:20}];
+  let r = await _xlsEncabezado(wsD, wb, "REPORTE FISCAL Y FINANCIERO", ultMes ? `Período destacado: ${ultMes}  ·  Datos: ${mesesOrd.length} meses` : "");
+  // Tarjetas KPI (2 columnas) — fila de rótulo teal + fila de valor grande
+  const kpiCard = (col, rotulo, valor, money=true, color=XLS_NAVY) => {
+    const rr = wsD.getRow(r);
+    const cRot = rr.getCell(col); cRot.value = rotulo;
+    cRot.font = { bold:true, size:9, color:{argb:XLS_WHITE} };
+    cRot.fill = { type:"pattern", pattern:"solid", fgColor:{argb:XLS_TEAL} };
+    const rv = wsD.getRow(r+1); const cVal = rv.getCell(col);
+    if (money) setMoney(cVal, valor); else { cVal.value = valor; cVal.alignment={horizontal:"right"}; }
+    cVal.font = { bold:true, size:14, color:{argb:color} };
+  };
+  kpiCard(1, "VENTAS NETAS (últ. mes)", u.ventasNeto);
+  kpiCard(4, "FACTURACIÓN (últ. mes)", u.facturacion);
+  r += 3;
+  kpiCard(1, "IVA DÉBITO (últ. mes)", u.ivaDebito);
+  kpiCard(4, "IVA PRELIMINAR", ivaPreliminar, true, ivaPreliminar>0?"FFB23A3A":"FF2E7D32");
+  r += 3;
+  kpiCard(1, "RESULTADO DOCUMENTAL (total)", resultadoDoc, true, "FF2E7D32");
+  kpiCard(4, "VARIACIÓN VENTAS INTERANUAL", varInter!=null ? varInter : "s/d", varInter==null);
+  if (varInter!=null) { wsD.getRow(r+1).getCell(4).value = varInter; wsD.getRow(r+1).getCell(4).numFmt = "0.0%"; }
+  r += 3;
+  kpiCard(1, "COMPROBANTES EMITIDOS", ventas.length, false, XLS_NAVY);
+  kpiCard(4, "COMPROBANTES RECIBIDOS", compras.length, false, XLS_NAVY);
+  r += 3;
+  // Lectura ejecutiva
+  const rLect = wsD.getRow(r); rLect.getCell(1).value = "LECTURA EJECUTIVA"; wsD.mergeCells(r,1,r,5); _xlsResult(rLect.getCell(1)); r++;
+  [ (ivaPreliminar>0?`• IVA preliminar a pagar por ${money2(ivaPreliminar)} en el período — validar créditos computables con el contador.`:"• Saldo de IVA a favor en el período."),
+    `• Facturación de ${mesesOrd.length} meses documentada desde el Libro IVA de ARCA.`,
+    (varInter!=null ? `• Las ventas ${varInter>=0?"crecieron":"cayeron"} un ${Math.abs(varInter*100).toFixed(1)}% interanual.` : "• Sin base interanual para comparar todavía."),
+    "• El resultado documental NO es la base imponible de Ganancias (requiere puente contable-fiscal).",
+    "• La caja requiere conciliación bancaria para confirmar saldos." ].forEach(t => { const row=wsD.getRow(r); row.getCell(1).value=t; wsD.mergeCells(r,1,r,5); row.getCell(1).font={size:10,color:{argb:"FF444444"}}; r++; });
 
-  // ── Hoja Indicadores mensuales ──
+  // ═══ Hoja 2: INDICADORES MENSUALES ═══
   const wsI = wb.addWorksheet("Indicadores_Mensuales");
-  wsI.columns = [{width:10},{width:15},{width:15},{width:14},{width:14},{width:15},{width:13},{width:14}];
-  let ri = await _xlsEncabezado(wsI, wb, "INDICADORES MENSUALES", "Evolución por período");
+  wsI.columns = [{width:10},{width:15},{width:15},{width:14},{width:14},{width:15},{width:13},{width:14},{width:8},{width:8}];
+  let ri = await _xlsEncabezado(wsI, wb, "INDICADORES MENSUALES", "Evolución por período (normalizado)");
   const hI = wsI.getRow(ri);
-  ["Período","Ventas netas","Facturación","IVA débito","Compras base","Compras total","IVA crédito","IVA preliminar"].forEach((h,i)=>{ hI.getCell(i+1).value=h; _xlsHeader(hI.getCell(i+1)); }); ri++;
-  mesesOrd.forEach(m => { const b=meses[m]; const row=wsI.getRow(ri);
+  ["Período","Ventas netas","Facturación","IVA débito","Compras base","Compras total","IVA crédito","IVA preliminar","Emit.","Recib."].forEach((h,i)=>{ hI.getCell(i+1).value=h; _xlsHeader(hI.getCell(i+1)); }); ri++;
+  mesesOrd.forEach((m,idx) => { const b=meses[m]; const row=wsI.getRow(ri);
     row.getCell(1).value=m; setMoney(row.getCell(2),b.ventasNeto); setMoney(row.getCell(3),b.facturacion);
     setMoney(row.getCell(4),b.ivaDebito); setMoney(row.getCell(5),b.comprasBase); setMoney(row.getCell(6),b.comprasTotal);
-    setMoney(row.getCell(7),b.ivaCredito); setMoney(row.getCell(8),b.ivaDebito-b.ivaCredito); ri++;
+    setMoney(row.getCell(7),b.ivaCredito); setMoney(row.getCell(8),b.ivaDebito-b.ivaCredito);
+    row.getCell(9).value=b.nV; row.getCell(10).value=b.nC;
+    if (idx%2) row.eachCell(c=>{ if(!c.fill||!c.fill.pattern) c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFF7FAFC"}}; });
+    ri++;
   });
 
-  // ── Hoja Posición IVA ──
+  // ═══ Hoja 3: VENTAS (detalle) ═══
+  const wsV = wb.addWorksheet("Ventas");
+  wsV.columns = [{width:12},{width:10},{width:16},{width:40},{width:8},{width:15},{width:12},{width:12},{width:15}];
+  let rv = await _xlsEncabezado(wsV, wb, "COMPROBANTES EMITIDOS", `${ventas.length} comprobantes`);
+  const hV = wsV.getRow(rv); ["Fecha","Período","N° Comprobante","Cliente","Moneda","Neto gravado","Exento","IVA","Total"].forEach((h,i)=>{ hV.getCell(i+1).value=h; _xlsHeader(hV.getCell(i+1)); }); rv++;
+  ventas.slice().sort((a,b)=>(a.emision||"").localeCompare(b.emision||"")).forEach((c,idx) => {
+    const row=wsV.getRow(rv);
+    row.getCell(1).value=c.emision||""; row.getCell(2).value=_mesDe(c.emision); row.getCell(3).value=c.numero||"";
+    row.getCell(4).value=c.contraparte||""; row.getCell(5).value=c.moneda||"ARS";
+    setMoney(row.getCell(6),c.neto||0); setMoney(row.getCell(7),c.exento||0); setMoney(row.getCell(8),c.iva||0); setMoney(row.getCell(9),c.monto||0);
+    if (idx%2) row.eachCell(cc=>{ cc.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFF7FAFC"}}; });
+    rv++;
+  });
+  const rvt = wsV.getRow(rv); rvt.getCell(1).value="TOTAL"; wsV.mergeCells(rv,1,rv,5); _xlsSubtotal(rvt.getCell(1));
+  setMoney(rvt.getCell(6), ventas.reduce((s,c)=>s+(c.neto||0),0)); _xlsSubtotal(rvt.getCell(6));
+  setMoney(rvt.getCell(7), ventas.reduce((s,c)=>s+(c.exento||0),0)); _xlsSubtotal(rvt.getCell(7));
+  setMoney(rvt.getCell(8), ventas.reduce((s,c)=>s+(c.iva||0),0)); _xlsSubtotal(rvt.getCell(8));
+  setMoney(rvt.getCell(9), ventas.reduce((s,c)=>s+(c.monto||0),0)); _xlsSubtotal(rvt.getCell(9));
+
+  // ═══ Hoja 4: COMPRAS (detalle) ═══
+  const wsC = wb.addWorksheet("Compras");
+  wsC.columns = [{width:12},{width:10},{width:16},{width:40},{width:8},{width:15},{width:12},{width:15}];
+  let rc = await _xlsEncabezado(wsC, wb, "COMPROBANTES RECIBIDOS", `${compras.length} comprobantes`);
+  const hC = wsC.getRow(rc); ["Fecha","Período","N° Comprobante","Proveedor","Moneda","Neto gravado","IVA","Total"].forEach((h,i)=>{ hC.getCell(i+1).value=h; _xlsHeader(hC.getCell(i+1)); }); rc++;
+  compras.slice().sort((a,b)=>(a.emision||"").localeCompare(b.emision||"")).forEach((c,idx) => {
+    const row=wsC.getRow(rc);
+    row.getCell(1).value=c.emision||""; row.getCell(2).value=_mesDe(c.emision); row.getCell(3).value=c.numero||"";
+    row.getCell(4).value=c.contraparte||""; row.getCell(5).value=c.moneda||"ARS";
+    setMoney(row.getCell(6),c.neto||0); setMoney(row.getCell(7),c.iva||0); setMoney(row.getCell(8),c.monto||0);
+    if (idx%2) row.eachCell(cc=>{ cc.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFF7FAFC"}}; });
+    rc++;
+  });
+  const rct = wsC.getRow(rc); rct.getCell(1).value="TOTAL"; wsC.mergeCells(rc,1,rc,5); _xlsSubtotal(rct.getCell(1));
+  setMoney(rct.getCell(6), compras.reduce((s,c)=>s+(c.neto||0),0)); _xlsSubtotal(rct.getCell(6));
+  setMoney(rct.getCell(7), compras.reduce((s,c)=>s+(c.iva||0),0)); _xlsSubtotal(rct.getCell(7));
+  setMoney(rct.getCell(8), compras.reduce((s,c)=>s+(c.monto||0),0)); _xlsSubtotal(rct.getCell(8));
+
+  // ═══ Hoja 5: RETENCIONES Y PERCEPCIONES ═══
+  const wsR = wb.addWorksheet("Ret_Per");
+  wsR.columns = [{width:12},{width:10},{width:40},{width:14},{width:12},{width:14},{width:18}];
+  let rr2 = await _xlsEncabezado(wsR, wb, "RETENCIONES Y PERCEPCIONES SUFRIDAS", `${rets.length} registros`);
+  const hR = wsR.getRow(rr2); ["Fecha","Período","Agente","Impuesto","Tipo","Importe","Certificado"].forEach((h,i)=>{ hR.getCell(i+1).value=h; _xlsHeader(hR.getCell(i+1)); }); rr2++;
+  rets.slice().sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||"")).forEach((x,idx) => {
+    const row=wsR.getRow(rr2);
+    row.getCell(1).value=x.fecha||""; row.getCell(2).value=_mesDe(x.fecha); row.getCell(3).value=x.agente||"";
+    row.getCell(4).value=x.impuesto||""; row.getCell(5).value=x.tipo==="percepcion"?"Percepción":"Retención";
+    setMoney(row.getCell(6),x.importe||0); row.getCell(7).value=x.certificado||"";
+    if (idx%2) row.eachCell(cc=>{ cc.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFF7FAFC"}}; });
+    rr2++;
+  });
+  const rrt = wsR.getRow(rr2); rrt.getCell(1).value="TOTAL"; wsR.mergeCells(rr2,1,rr2,5); _xlsSubtotal(rrt.getCell(1));
+  setMoney(rrt.getCell(6), rets.reduce((s,x)=>s+(x.importe||0),0)); _xlsSubtotal(rrt.getCell(6));
+
+  // ═══ Hoja 6: POSICIÓN IVA ═══
   const wsP = wb.addWorksheet("Posicion_IVA");
-  wsP.columns = [{width:38},{width:16}];
+  wsP.columns = [{width:40},{width:16}];
   let rp = await _xlsEncabezado(wsP, wb, "POSICIÓN DE IVA", ultMes || "");
   const hP = wsP.getRow(rp); hP.getCell(1).value="Concepto"; hP.getCell(2).value="Monto"; _xlsHeader(hP.getCell(1)); _xlsHeader(hP.getCell(2)); rp++;
-  [["IVA débito (ventas)",u.ivaDebito],["IVA crédito computable (compras)",u.ivaCredito],["Retenciones/percepciones IVA",retIVA]].forEach(([t,v])=>{ const row=wsP.getRow(rp); row.getCell(1).value=t; setMoney(row.getCell(2),v); rp++; });
+  [["IVA débito (ventas)",u.ivaDebito],["IVA crédito computable (compras validadas)",u.ivaCredito],["Retenciones/percepciones IVA del período",retIVA]].forEach(([t,v])=>{ const row=wsP.getRow(rp); row.getCell(1).value=t; setMoney(row.getCell(2),v); rp++; });
   const rPos = wsP.getRow(rp); rPos.getCell(1).value="POSICIÓN (débito − crédito − ret.)"; _xlsResult(rPos.getCell(1)); setMoney(rPos.getCell(2), ivaPreliminar); _xlsResult(rPos.getCell(2));
 
-  // ── Hoja Recomendaciones ──
-  const wsR = wb.addWorksheet("Recomendaciones");
-  wsR.columns = [{width:12},{width:22},{width:40},{width:42},{width:12},{width:32}];
-  let rr = await _xlsEncabezado(wsR, wb, "RECOMENDACIONES DEL MODELO", "Requieren aprobación profesional");
-  const hR = wsR.getRow(rr); ["Variable","Condición","Diagnóstico","Recomendación","Prioridad","Evidencia"].forEach((h,i)=>{ hR.getCell(i+1).value=h; _xlsHeader(hR.getCell(i+1)); }); rr++;
+  // ═══ Hoja 7: RECOMENDACIONES ═══
+  const wsRe = wb.addWorksheet("Recomendaciones");
+  wsRe.columns = [{width:12},{width:22},{width:40},{width:42},{width:12},{width:32}];
+  let rre = await _xlsEncabezado(wsRe, wb, "RECOMENDACIONES DEL MODELO", "Requieren aprobación profesional");
+  const hRe = wsRe.getRow(rre); ["Variable","Condición","Diagnóstico","Recomendación","Prioridad","Evidencia"].forEach((h,i)=>{ hRe.getCell(i+1).value=h; _xlsHeader(hRe.getCell(i+1)); }); rre++;
   if (typeof calcularFiscal==="function" && typeof recomendacionesFiscales==="function" && typeof estimarGanancias==="function") {
     const f = calcularFiscal("1900-01-01","2100-12-31");
     recomendacionesFiscales(f, estimarGanancias(f)).forEach(rec => {
-      const row = wsR.getRow(rr);
+      const row = wsRe.getRow(rre);
       row.getCell(1).value=rec.variable; row.getCell(2).value=rec.condicion; row.getCell(3).value=rec.diagnostico;
       row.getCell(4).value=rec.accion; row.getCell(5).value=rec.prioridad; row.getCell(6).value=(rec.evidencia||[]).join(", ");
       row.alignment = { wrapText:true, vertical:"top" };
-      rr++;
+      const pc = row.getCell(5); pc.font = { bold:true, color:{argb: rec.prioridad==="alta"?"FFB23A3A":rec.prioridad==="media"?"FFC86A00":"FF64748B"} };
+      rre++;
     });
   }
 
-  // ── Hoja Metodología ──
+  // ═══ Hoja 8: CONTROLES Y DATOS FALTANTES ═══
+  const wsCt = wb.addWorksheet("Controles");
+  wsCt.columns = [{width:40},{width:14},{width:34}];
+  let rct2 = await _xlsEncabezado(wsCt, wb, "CONTROLES Y DATOS FALTANTES", "Semáforo de integridad del análisis");
+  const hCt = wsCt.getRow(rct2); ["Elemento","Estado","Acción sugerida"].forEach((h,i)=>{ hCt.getCell(i+1).value=h; _xlsHeader(hCt.getCell(i+1)); }); rct2++;
+  const compraSinIVA = compras.filter(c => c.iva == null).length;
+  const controles = [
+    ["Comprobantes de venta cargados", ventas.length>0?"OK":"FALTA", ventas.length>0?"—":"Importar Libro IVA Ventas de ARCA"],
+    ["Comprobantes de compra cargados", compras.length>0?"OK":"FALTA", compras.length>0?"—":"Importar Libro IVA Compras de ARCA"],
+    ["Retenciones/percepciones cargadas", rets.length>0?"OK":"FALTA", rets.length>0?"—":"Importar Mis Retenciones de ARCA"],
+    ["IVA crédito validado por profesional", "PENDIENTE", "El contador debe validar la computabilidad de cada compra"],
+    ["Extractos bancarios / conciliación", "FALTA", "Subir extractos para confirmar saldos reales"],
+    ["Saldos iniciales de cuentas", "REVISAR", "Confirmar saldo real de cada cuenta (home banking)"],
+    ["Ganancias — puente contable-fiscal", "BLOQUEADO", "Requiere balance, amortizaciones, quebrantos y anticipos"],
+  ];
+  controles.forEach((ct,idx)=>{ const row=wsCt.getRow(rct2); row.getCell(1).value=ct[0]; row.getCell(2).value=ct[1]; row.getCell(3).value=ct[2];
+    const est=row.getCell(2); const col = ct[1]==="OK"?"FF2E7D32":ct[1]==="PENDIENTE"||ct[1]==="REVISAR"?"FFC86A00":"FFB23A3A";
+    est.font={bold:true,color:{argb:col}}; est.alignment={horizontal:"center"};
+    row.getCell(3).alignment={wrapText:true};
+    if (idx%2) row.eachCell(cc=>{ if(cc.col!=2) cc.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFF7FAFC"}}; });
+    rct2++;
+  });
+
+  // ═══ Hoja 9: METODOLOGÍA ═══
   const wsM = wb.addWorksheet("Metodologia");
-  wsM.columns = [{width:22},{width:72}];
-  let rm = await _xlsEncabezado(wsM, wb, "METODOLOGÍA Y LIMITACIONES", "");
+  wsM.columns = [{width:24},{width:74}];
+  let rm = await _xlsEncabezado(wsM, wb, "METODOLOGÍA Y LIMITACIONES", "Definiciones aplicadas en este reporte");
   const hM = wsM.getRow(rm); hM.getCell(1).value="Concepto"; hM.getCell(2).value="Definición"; _xlsHeader(hM.getCell(1)); _xlsHeader(hM.getCell(2)); rm++;
   [["Ventas netas","Neto gravado + no gravado + exento de comprobantes emitidos."],
    ["Compras base","Neto gravado + no gravado + exento de comprobantes recibidos."],
    ["IVA débito","IVA de comprobantes de venta."],
-   ["IVA crédito","IVA de compras validadas como computables (no se computa por defecto)."],
+   ["IVA crédito","IVA de compras validadas como computables (NO se computa por defecto — criterio prudente)."],
    ["IVA preliminar","IVA débito − IVA crédito computable − retenciones/percepciones IVA del período."],
    ["Resultado documental","Ventas netas − compras base. NO es la base imponible de Ganancias."],
-   ["Ganancias","Requiere puente contable-fiscal (balance, ajustes, amortizaciones, quebrantos)."]
+   ["Ganancias","Requiere puente contable-fiscal (balance, ajustes, amortizaciones, quebrantos, anticipos)."],
+   ["Variación interanual","Ventas netas del mes vs. mismo mes del año anterior."],
+   ["Limitación","Análisis de gestión sobre datos cargados. No reemplaza las DDJJ ni la revisión del contador."]
   ].forEach(([c,d])=>{ const row=wsM.getRow(rm); row.getCell(1).value=c; row.getCell(1).font={bold:true}; row.getCell(2).value=d; row.getCell(2).alignment={wrapText:true}; rm++; });
 
   await _xlsSave(wb, `Reporte_Fiscal_Financiero_${_hoyTxt().replace(/\//g,"-")}.xlsx`);
 }
+
+function money2(n){ return "$"+Math.round(n).toLocaleString("es-AR"); }
