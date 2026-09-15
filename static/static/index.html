@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0B1F3A">
+  <title>Calce — Tesorería PyME</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css?v=1">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" width="30" height="30" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M30 9 A14 14 0 0 0 20 5 A14 14 0 0 0 6 19 L13 19 A7 7 0 0 1 20 12 A7 7 0 0 1 25 14 Z" fill="#2DD4BF"/>
+        <path d="M30 31 A14 14 0 0 1 20 35 A14 14 0 0 1 6 21 L13 21 A7 7 0 0 0 20 28 A7 7 0 0 0 25 26 Z" fill="#4C8DFF"/>
+      </svg>
+      <span class="brand-name">Calce</span>
+    </div>
+    <nav class="topnav">
+      <button class="nav-item active" data-view="dashboard">Inicio</button>
+      <button class="nav-item" data-view="flujo">Flujo de caja</button>
+      <button class="nav-item" data-view="saldos">Posición de caja</button>
+      <button class="nav-item" data-view="comprobantes">Cobranzas y Pagos</button>
+      <div class="nav-dropdown">
+        <button class="nav-item nav-drop-btn" data-group="inversiones">Inversiones <span class="caret">▾</span></button>
+        <div class="nav-menu">
+          <button class="nav-sub" data-view="cartera">Mis inversiones</button>
+          <button class="nav-sub" data-view="excedente">Invertir excedente</button>
+          <button class="nav-sub" data-view="rendimiento">Rendimiento</button>
+          <button class="nav-sub" data-view="inversiones" data-adv>Simulador</button>
+          <button class="nav-sub" data-view="divisas" data-adv>Dólar (comprar/vender)</button>
+          <button class="nav-sub" data-view="fci" data-adv>FCI</button>
+          <button class="nav-sub" data-view="mercado" data-adv>Bonos</button>
+        </div>
+      </div>
+      <div class="nav-dropdown">
+        <button class="nav-item nav-drop-btn" data-group="fiscal">Fiscal y contable <span class="caret">▾</span></button>
+        <div class="nav-menu">
+          <button class="nav-sub" data-view="impuestos">Impuestos</button>
+          <button class="nav-sub" data-view="analisis">Resultado económico</button>
+          <button class="nav-sub" data-view="contabilidad">Contabilidad</button>
+          <button class="nav-sub" data-view="conciliacion" data-adv>Conciliación</button>
+        </div>
+      </div>
+      <button class="nav-item nav-config" data-view="config" title="Configuración">⚙ Configuración</button>
+    </nav>
+  </header>
+
+  <main class="main" id="main">
+    <!-- Vista Inicio / Dashboard -->
+    <section class="view" id="view-dashboard">
+      <div class="dash-wrap" id="dash-wrap"></div>
+    </section>
+
+    <!-- Vista Flujo de caja -->
+    <section class="view hidden" id="view-flujo">
+
+      <div class="board">
+        <!-- Panel de control izquierdo -->
+        <aside class="controls">
+          <div class="ctrl-card">
+            <div class="ctrl-head">
+              <h2>Saldo por cuenta</h2>
+              <button class="add-btn ghost" id="acc-manage-link">⚙ Gestionar</button>
+            </div>
+            <div class="accounts-list" id="accounts-list"></div>
+            <div class="accounts-total" id="accounts-total"></div>
+          </div>
+
+          <div class="ctrl-card">
+            <div class="ctrl-head">
+              <h2>Movimientos</h2>
+              <div class="ctrl-actions">
+                <button class="add-btn ghost" id="import-mov">↑ Importar</button>
+                <button class="add-btn" id="add-mov">+ Agregar</button>
+              </div>
+            </div>
+            <input type="file" id="import-file" accept=".xlsx,.xls,.csv" style="display:none">
+            <div id="mov-summary"></div>
+          </div>
+          <!-- Ocultos: mantienen la lógica de proyección -->
+          <input type="hidden" id="buffer" value="0">
+          <input type="hidden" id="horizon" value="180">
+        </aside>
+
+        <!-- Resultado principal -->
+        <div class="result">
+          <div class="kpi-row" id="kpi-row"></div>
+          <div class="currency-tabs" id="currency-tabs"></div>
+          <div class="table-card">
+            <div class="chart-head cf-header">
+              <h2>Flujo de caja</h2>
+              <button class="cf-link" id="cf-xlsx">↓ Excel</button>
+              <button class="cf-link" id="cf-pdf">↓ PDF</button>
+            </div>
+            <!-- Barra de período -->
+            <div class="cf-period-bar">
+              <div class="cf-quick" id="cf-quick">
+                <button class="qk" data-range="hoy">Hoy</button>
+                <button class="qk" data-range="semana">Esta semana</button>
+                <button class="qk active" data-range="mes">Este mes</button>
+                <button class="qk" data-range="90">Próx. 90 días</button>
+                <button class="qk" data-range="pasado">Últimos 180 días</button>
+              </div>
+              <div class="cf-custom">
+                <label>Desde <input type="date" id="cf-from"></label>
+                <label>Hasta <input type="date" id="cf-to"></label>
+              </div>
+            </div>
+            <div class="cf-subbar">
+              <div class="cf-subbar-left">
+                <label class="cf-acct-label">Ver cuenta:</label>
+              </div>
+              <select id="cf-account-filter" class="cf-account-filter">
+                <option value="">Todas las cuentas (consolidado)</option>
+              </select>
+            </div>
+            <div id="cf-table"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-head">
+              <h2>Evolución del saldo</h2>
+              <div class="chart-legend">
+                <span class="lg lg-balance">Saldo</span>
+              </div>
+            </div>
+            <div id="chart"></div>
+          </div>
+          <div class="insights" id="insights"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Vista Saldos (tablero de saldos, evolución, líquido vs colocado, conciliación) -->
+    <section class="view hidden" id="view-saldos">
+      <div class="saldos-wrap" id="saldos-wrap"></div>
+    </section>
+
+    <!-- Vista Cobranzas y Pagos (AR/AP) -->
+    <section class="view hidden" id="view-comprobantes">
+      <div class="comp-wrap" id="comp-wrap"></div>
+    </section>
+
+    <!-- Vista Excedente -->
+    <section class="view hidden" id="view-excedente">
+      <div class="excedente-wrap" id="excedente-wrap"></div>
+    </section>
+
+    <!-- Vista Rendimiento del excedente invertido -->
+    <section class="view hidden" id="view-rendimiento">
+      <div class="rend-wrap" id="rend-wrap"></div>
+    </section>
+
+    <!-- Vista Inversiones -->
+    <section class="view hidden" id="view-inversiones">
+      <div class="inv-wrap" id="inv-wrap"></div>
+    </section>
+
+    <!-- Vista Mis inversiones (cartera de colocaciones) -->
+    <section class="view hidden" id="view-cartera">
+      <div class="cartera-wrap" id="cartera-wrap"></div>
+    </section>
+
+    <!-- Vista Dólar: comprar / vender divisas -->
+    <section class="view hidden" id="view-divisas">
+      <div class="divisas-wrap" id="divisas-wrap"></div>
+    </section>
+
+    <!-- Vista Mercado de bonos (tableros con métricas y curvas) -->
+    <section class="view hidden" id="view-mercado">
+      <div class="mkt-wrap" id="mkt-wrap"></div>
+    </section>
+
+    <!-- Vista FCI con filtros -->
+    <section class="view hidden" id="view-fci">
+      <div class="fci-wrap" id="fci-wrap"></div>
+    </section>
+
+    <!-- Vista Impuestos -->
+    <section class="view hidden" id="view-impuestos">
+      <div class="imp-wrap" id="imp-wrap"></div>
+    </section>
+
+    <!-- Vista Análisis fiscal (posición IVA + Ganancias + recomendaciones) -->
+    <section class="view hidden" id="view-analisis">
+      <div class="analisis-wrap" id="analisis-wrap"></div>
+    </section>
+
+    <!-- Vista Contabilidad (Estado de Resultados + Sumas y Saldos) -->
+    <section class="view hidden" id="view-contabilidad">
+      <div class="conta-wrap" id="conta-wrap"></div>
+    </section>
+
+    <!-- Vista Conciliación bancaria -->
+    <section class="view hidden" id="view-conciliacion">
+      <div class="conc-wrap" id="conc-wrap"></div>
+    </section>
+
+    <!-- Vista Configuración -->
+    <section class="view hidden" id="view-config">
+      <div class="config-wrap" id="config-wrap"></div>
+    </section>
+  </main>
+
+  <!-- Template de fila de movimiento -->
+  <template id="mov-template">
+    <div class="mov-row">
+      <input class="mov-label" type="text" placeholder="Concepto">
+      <div class="mov-amount">
+        <select class="mov-sign">
+          <option value="1">Entra</option>
+          <option value="-1">Sale</option>
+        </select>
+        <input class="mov-value" type="number" placeholder="0" step="1000">
+      </div>
+      <input class="mov-date" type="date">
+      <div class="mov-meta">
+        <select class="mov-rec">
+          <option value="none">Una vez</option>
+          <option value="weekly">Semanal</option>
+          <option value="monthly">Mensual</option>
+        </select>
+        <select class="mov-medio">
+          <option value="transferencia">Transferencia</option>
+          <option value="efectivo">Efectivo</option>
+          <option value="cheque">Cheque</option>
+          <option value="tarjeta">Tarjeta</option>
+        </select>
+      </div>
+      <button class="mov-del" title="Eliminar">×</button>
+    </div>
+  </template>
+
+  <!-- Modal para agregar/editar movimiento -->
+  <div class="modal-overlay hidden" id="mov-modal">
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="mov-modal-title">Nuevo movimiento</h2>
+        <button class="modal-close" id="mov-modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="mov-mode-tabs">
+          <button class="mov-mode active" data-mode="simple">Simple</button>
+          <button class="mov-mode" data-mode="cheque">Cheque</button>
+          <button class="mov-mode" data-mode="cuotas">En cuotas</button>
+        </div>
+
+        <label class="field"><span>Concepto</span>
+          <input type="text" id="m-label" placeholder="Ej: Cobranza cliente">
+        </label>
+        <div class="modal-row">
+          <label class="field"><span>Tipo</span>
+            <select id="m-sign">
+              <option value="1">Entra (ingreso)</option>
+              <option value="-1">Sale (gasto)</option>
+            </select>
+          </label>
+          <label class="field"><span id="m-value-label">Monto</span>
+            <div class="money-input"><em id="m-cur">$</em><input type="number" id="m-value" placeholder="0" step="1000"></div>
+          </label>
+        </div>
+
+        <!-- Fila fecha + repetición (modo simple) -->
+        <div class="modal-row" id="m-simple-row">
+          <label class="field"><span>Fecha</span>
+            <input type="date" id="m-date">
+          </label>
+          <label class="field"><span>Repetición</span>
+            <select id="m-rec">
+              <option value="none">Una vez</option>
+              <option value="weekly">Semanal</option>
+              <option value="quincenal">Quincenal</option>
+              <option value="monthly">Mensual</option>
+              <option value="quarterly">Trimestral</option>
+            </select>
+          </label>
+        </div>
+
+        <!-- Cheque: fecha de emisión + vencimiento -->
+        <div id="m-cheque-block" style="display:none">
+          <div class="modal-row">
+            <label class="field"><span>Fecha de emisión</span>
+              <input type="date" id="m-emision">
+            </label>
+            <label class="field"><span>Fecha de vencimiento (cobro/pago)</span>
+              <input type="date" id="m-venc">
+            </label>
+          </div>
+          <p class="modal-note">El cheque impacta la caja en la fecha de vencimiento.</p>
+        </div>
+
+        <!-- Cuotas: lista de fechas + montos -->
+        <div id="m-cuotas-block" style="display:none">
+          <div class="cuotas-head">
+            <span>Cuotas</span>
+            <button type="button" class="cf-link" id="m-add-cuota">+ Agregar cuota</button>
+          </div>
+          <div id="m-cuotas-list"></div>
+          <p class="modal-note" id="m-cuotas-total"></p>
+        </div>
+
+        <label class="field"><span>Medio de cobro / pago</span>
+          <select id="m-medio">
+            <option value="transferencia">Transferencia</option>
+            <option value="efectivo">Efectivo</option>
+            <option value="cheque">Cheque</option>
+            <option value="tarjeta">Tarjeta</option>
+          </select>
+        </label>
+        <div class="field" id="m-tarjeta-field" style="display:none">
+          <span>Acreditación de la tarjeta</span>
+          <select id="m-tarjeta-plazo">
+            <option value="2">Débito · acredita en ~48 hs</option>
+            <option value="18">Crédito · acredita en ~18 días</option>
+            <option value="custom">Otra fecha (la elijo abajo)</option>
+          </select>
+          <small>La plata cae en el flujo de caja en la fecha estimada de acreditación. Después la podés confirmar.</small>
+        </div>
+        <label class="field"><span>Cuenta</span>
+          <select id="m-account"></select>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-ghost" id="mov-modal-cancel">Cancelar</button>
+        <button class="btn-primary" id="mov-modal-save">Agregar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: nueva inversión / colocación -->
+  <div class="modal-overlay hidden" id="inv-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="inv-modal-title">Nueva inversión</h3>
+        <button class="modal-close" id="inv-modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="field"><span>Tipo de inversión</span>
+          <select id="i-tipo"></select>
+        </label>
+        <label class="field"><span>Nombre / detalle</span>
+          <input type="text" id="i-label" placeholder="Ej: Plazo fijo Nación 30 días">
+        </label>
+        <label class="field" id="i-sociedad-field"><span>Banco / Sociedad (dónde está)</span>
+          <input type="text" id="i-sociedad" placeholder="Ej: Galicia Administradora de Fondos">
+        </label>
+        <div class="modal-row">
+          <label class="field"><span>Monto colocado</span>
+            <div class="money-input"><em id="i-cur">$</em><input type="number" id="i-monto" placeholder="0" step="1000"></div>
+          </label>
+          <label class="field"><span>Sale de la cuenta</span>
+            <select id="i-account"></select>
+          </label>
+        </div>
+        <div class="modal-row">
+          <label class="field"><span>Fecha de colocación</span>
+            <input type="date" id="i-fecha">
+          </label>
+          <label class="field" id="i-venc-field"><span>Fecha de vencimiento</span>
+            <input type="date" id="i-venc">
+          </label>
+          <label class="field" id="i-rescate-field"><span>Plazo de rescate</span>
+            <select id="i-rescate">
+              <option value="0">T+0 · mismo día (money market)</option>
+              <option value="1">T+1 · 24 hs hábiles</option>
+              <option value="2">T+2 · 48 hs hábiles</option>
+            </select>
+            <small>Cuántos días tarda en volver la plata cuando lo rescatás.</small>
+          </label>
+        </div>
+        <label class="field"><span id="i-rend-label">Rendimiento esperado (TNA %)</span>
+          <div class="pct-input"><input type="number" id="i-rend" placeholder="0" step="0.5"><em>%</em></div>
+          <small id="i-rend-hint">Tasa nominal anual. La usamos para estimar cuánto vuelve al vencimiento.</small>
+        </label>
+        <div class="inv-preview-box" id="i-preview"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-ghost" id="inv-modal-cancel">Cancelar</button>
+        <button class="btn-primary" id="inv-modal-save">Registrar inversión</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: nueva factura / comprobante (cobrar o pagar) -->
+  <div class="modal-overlay hidden" id="comp-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="comp-modal-title">Nueva factura</h3>
+        <button class="modal-close" id="comp-modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="mov-mode-tabs">
+          <button class="comp-mode active" data-ctipo="cobrar">Factura a cobrar</button>
+          <button class="comp-mode" data-ctipo="pagar">Factura a pagar</button>
+        </div>
+        <div class="modal-row">
+          <label class="field"><span id="c-contra-label">Cliente</span>
+            <input type="text" id="c-contraparte" placeholder="Ej: Municipalidad de La Plata">
+          </label>
+          <label class="field"><span>N° de comprobante</span>
+            <input type="text" id="c-numero" placeholder="Ej: A-0001-00012345">
+          </label>
+        </div>
+        <div class="modal-row">
+          <label class="field"><span>Monto total</span>
+            <div class="money-input"><em id="c-cur">$</em><input type="number" id="c-monto" placeholder="0" step="1000"></div>
+          </label>
+          <label class="field"><span>Cuenta destino</span>
+            <select id="c-account"></select>
+          </label>
+        </div>
+        <details class="comp-iva-details">
+          <summary>Discriminar impuestos (opcional)</summary>
+          <div class="modal-row">
+            <label class="field"><span>Neto gravado</span>
+              <div class="money-input"><em>$</em><input type="number" id="c-neto" placeholder="0" step="1000"></div>
+            </label>
+            <label class="field"><span>IVA</span>
+              <div class="money-input"><em>$</em><input type="number" id="c-iva" placeholder="0" step="1000"></div>
+            </label>
+          </div>
+          <div class="modal-row">
+            <label class="field"><span>No gravado</span>
+              <div class="money-input"><em>$</em><input type="number" id="c-nograv" placeholder="0" step="1000"></div>
+            </label>
+            <label class="field"><span>Exento</span>
+              <div class="money-input"><em>$</em><input type="number" id="c-exento" placeholder="0" step="1000"></div>
+            </label>
+          </div>
+          <p class="comp-iva-hint" id="c-iva-hint">Si cargás el neto y el IVA, el total se calcula solo.</p>
+        </details>
+        <div class="modal-row">
+          <label class="field"><span>Fecha de emisión</span>
+            <input type="date" id="c-emision">
+          </label>
+          <label class="field"><span>Fecha de vencimiento</span>
+            <input type="date" id="c-vencimiento">
+          </label>
+        </div>
+        <label class="field"><span>Categoría</span>
+          <select id="c-categoria"></select>
+        </label>
+        <p class="modal-note" id="c-note">La factura impacta tu flujo de caja proyectado en la fecha de vencimiento. Cuando la cobrás, la marcás como saldada.</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-ghost" id="comp-modal-cancel">Cancelar</button>
+        <button class="btn-primary" id="comp-modal-save">Guardar factura</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: proveedor (directorio) -->
+  <!-- Modal: importar de AFIP (Libro IVA Compras) -->
+  <div class="modal-overlay hidden" id="afip-modal">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h3 id="afip-modal-title">Importar de AFIP</h3>
+        <button class="modal-close" id="afip-modal-close">×</button>
+      </div>
+      <div class="modal-body" id="afip-modal-body"></div>
+      <div class="modal-foot">
+        <button class="btn-ghost" id="afip-modal-cancel">Cancelar</button>
+        <button class="btn-primary" id="afip-modal-confirm">Importar lo seleccionado</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="prov-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="prov-modal-title">Nuevo proveedor</h3>
+        <button class="modal-close" id="prov-modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-row">
+          <label class="field"><span>Nombre / Razón social</span>
+            <input type="text" id="p-nombre" placeholder="Ej: Corralón El Constructor">
+          </label>
+          <label class="field"><span>CUIT</span>
+            <input type="text" id="p-cuit" placeholder="30-12345678-9">
+          </label>
+        </div>
+        <div class="modal-row">
+          <label class="field"><span>Rubro</span>
+            <input type="text" id="p-rubro" placeholder="Materiales, Subcontratos...">
+          </label>
+          <label class="field"><span>Condición IVA</span>
+            <select id="p-iva"></select>
+          </label>
+        </div>
+        <div class="modal-row">
+          <label class="field"><span>Contacto</span>
+            <input type="text" id="p-contacto" placeholder="Nombre del contacto">
+          </label>
+          <label class="field"><span>Teléfono</span>
+            <input type="text" id="p-telefono" placeholder="011-1234-5678">
+          </label>
+        </div>
+        <label class="field"><span>Email</span>
+          <input type="email" id="p-email" placeholder="ventas@proveedor.com">
+        </label>
+        <div class="modal-row">
+          <label class="field"><span>CBU / Alias</span>
+            <input type="text" id="p-cbu" placeholder="0110599520000012345678">
+          </label>
+          <label class="field"><span>Plazo de pago (días)</span>
+            <input type="number" id="p-plazo" placeholder="30" step="1">
+          </label>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-ghost" id="prov-modal-cancel">Cancelar</button>
+        <button class="btn-primary" id="prov-modal-save">Guardar proveedor</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="save-indicator" id="save-indicator">✓ Guardado</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+  <script src="/static/bancos.js?v=1"></script>
+  <script src="/static/demo_comprobantes.js?v=1"></script>
+  <script src="/static/demo_consultorio.js?v=1"></script>
+  <script src="/static/reportes.js?v=1"></script>
+  <script src="/static/analisis_fiscal.js?v=1"></script>
+  <script src="/static/app.js?v=1"></script>
+</body>
+</html>
