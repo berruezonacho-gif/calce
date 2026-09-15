@@ -329,21 +329,40 @@ function exportarEstadoResultadosPdf(acum, label) {
 async function exportarSumasSaldosXlsx(cuentas, label) {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Sumas y Saldos");
-  ws.columns = [{width:48},{width:16},{width:16}];
+  ws.columns = [{width:52},{width:16},{width:16}];
   let r = await _xlsEncabezado(ws, wb, "Sumas y Saldos (vista de gestión)", `Periodo: ${label}  ·  Corte: ${_hoyTxt()}`);
   const setMoney = (cell, v) => { cell.value = v; cell.numFmt = XLS_MONEY; cell.alignment = { horizontal: "right" }; };
-  const hr = ws.getRow(r); ["Cuenta","Debe","Haber"].forEach((h,i)=>{ hr.getCell(i+1).value = h; _xlsHeader(hr.getCell(i+1)); }); r++;
-  cuentas.forEach(c => { const row = ws.getRow(r); row.getCell(1).value = c.nombre; if(c.debe) setMoney(row.getCell(2), c.debe); if(c.haber) setMoney(row.getCell(3), c.haber); r++; });
+  const hr = ws.getRow(r); ["Cuenta / Asiento","Debe","Haber"].forEach((h,i)=>{ hr.getCell(i+1).value = h; _xlsHeader(hr.getCell(i+1)); }); r++;
+  cuentas.forEach(c => {
+    const row = ws.getRow(r);
+    row.getCell(1).value = c.nombre; row.getCell(1).font = { bold:true };
+    if(c.debe) setMoney(row.getCell(2), c.debe); if(c.haber) setMoney(row.getCell(3), c.haber);
+    r++;
+    // Detalle por asiento (indentado, gris)
+    (c.detalle||[]).forEach(d => {
+      const dr = ws.getRow(r);
+      dr.getCell(1).value = "    " + d.concepto; dr.getCell(1).font = { size:9, color:{argb:"FF787878"} };
+      const md = dr.getCell(2); md.value = d.monto; md.numFmt = XLS_MONEY; md.font = { size:9, color:{argb:"FF787878"} }; md.alignment = { horizontal:"right" };
+      r++;
+    });
+  });
   const totD = cuentas.reduce((s,c)=>s+(c.debe||0),0), totH = cuentas.reduce((s,c)=>s+(c.haber||0),0);
   const tr = ws.getRow(r); tr.getCell(1).value = "TOTAL"; _xlsResult(tr.getCell(1)); setMoney(tr.getCell(2), totD); _xlsResult(tr.getCell(2)); setMoney(tr.getCell(3), totH); _xlsResult(tr.getCell(3)); r++;
+  const cierra = Math.abs(totD-totH) < 1;
   const dr = ws.getRow(r); dr.getCell(1).value = "Diferencia (Debe − Haber)"; dr.getCell(1).font = { bold:true }; setMoney(dr.getCell(2), totD-totH); dr.getCell(2).font = { bold:true }; r += 2;
   ws.mergeCells(r,1,r,3);
   const adv = ws.getRow(r).getCell(1);
-  adv.value = "ADVERTENCIA: el Debe y el Haber NO cierran en cero porque no se registra una cuenta de Patrimonio/Capital inicial. Es una vista de gestión, no un balance contable legal.";
-  adv.font = { bold:true, color:{argb:"FFB23A3A"}, size:9 };
-  adv.fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FFFBEDED"} };
+  if (cierra) {
+    adv.value = "El Sumas y Saldos cierra en 0 gracias a la cuenta de Patrimonio Neto (capital inicial + resultados acumulados). Es una vista de gestión, no un balance contable legal — validá con tu contador.";
+    adv.font = { size:9, color:{argb:"FF2E5B33"} };
+    adv.fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FFEAF6EC"} };
+  } else {
+    adv.value = "ADVERTENCIA: el Debe y el Haber no cierran. Revisá el detalle por asiento de cada cuenta para encontrar la diferencia.";
+    adv.font = { bold:true, color:{argb:"FFB23A3A"}, size:9 };
+    adv.fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FFFBEDED"} };
+  }
   adv.alignment = { wrapText:true, vertical:"top" };
-  ws.getRow(r).height = 32;
+  ws.getRow(r).height = 40;
   await _xlsSave(wb, `Sumas_y_Saldos_${label.replace(/\s+/g,"_")}.xlsx`);
 }
 

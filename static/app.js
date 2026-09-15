@@ -2657,10 +2657,15 @@ function renderComprobantes() {
     const ivaCell = mostrarIva
       ? `<td class="comp-iva-cell"><label class="comp-iva-toggle" title="Marcá si el contador confirmó que este IVA es computable"><input type="checkbox" class="comp-iva-chk" data-ivachk="${c.id}" ${c.ivaComputable===true?"checked":""}><span>${money(c.iva)}</span></label></td>`
       : (!esCobrar ? `<td class="muted">—</td>` : "");
+    // Toggle de gasto computable a Ganancias: solo en compras (pagar)
+    const ganCell = !esCobrar
+      ? `<td class="comp-iva-cell"><label class="comp-iva-toggle" title="Marcá si el gasto es deducible en Ganancias (vinculado a la actividad)"><input type="checkbox" class="comp-gan-chk" data-ganchk="${c.id}" ${c.ganComputable===true?"checked":""}><span>Deducible</span></label></td>`
+      : "";
     return `<tr class="comp-row" data-id="${c.id}">
     <td class="comp-contra"><b>${h(c.contraparte || "—")}</b><small>${h(c.numero || "")}</small></td>
     <td class="mono">${moneyC(c.monto, c.moneda)}</td>
     ${ivaCell}
+    ${ganCell}
     <td>${fmtDateFull(c.emision)}</td>
     <td>${fmtDateFull(c.vencimiento)}</td>
     <td>${estadoBadge(c)}</td>
@@ -2719,7 +2724,7 @@ function renderComprobantes() {
       <div class="chart-head"><h2>${esCobrar?"Facturas por cobrar":"Facturas por pagar"}</h2>${!esCobrar && comps.some(c=>(c.iva||0)>0) ? `<button class="btn-ghost sm" id="comp-validar-iva">✓ Validar todo el IVA del período</button>` : ""}</div>
       ${!esCobrar && comps.some(c=>(c.iva||0)>0) ? `<p class="comp-iva-hint">Tildá el IVA de cada compra que tu contador confirmó como computable. Solo el IVA tildado se descuenta en tu posición de IVA (Resultado económico).</p>` : ""}
       ${orden.length ? `<div class="cf-table-scroll"><table class="cf-table">
-        <thead><tr><th>${esCobrar?"Cliente":"Proveedor"}</th><th>Monto</th>${!esCobrar?"<th>IVA computable</th>":""}<th>Emisión</th><th>Vencimiento</th><th>Estado</th><th></th></tr></thead>
+        <thead><tr><th>${esCobrar?"Cliente":"Proveedor"}</th><th>Monto</th>${!esCobrar?"<th>IVA computable</th><th>Deducible Gcias.</th>":""}<th>Emisión</th><th>Vencimiento</th><th>Estado</th><th></th></tr></thead>
         <tbody>${orden.map(filaComp).join("")}</tbody>
       </table></div>` : `<p class="cf-empty">No hay facturas cargadas. Tocá "Nueva factura" para empezar.</p>`}
     </div>`;
@@ -2732,6 +2737,10 @@ function renderComprobantes() {
   $$(".comp-iva-chk").forEach(chk => chk.onchange = () => {
     const c = state.comprobantes.find(x => x.id === chk.dataset.ivachk);
     if (c) { c.ivaComputable = chk.checked; saveState(); }
+  });
+  $$(".comp-gan-chk").forEach(chk => chk.onchange = () => {
+    const c = state.comprobantes.find(x => x.id === chk.dataset.ganchk);
+    if (c) { c.ganComputable = chk.checked; saveState(); }
   });
   // Validar todo el IVA del período (todas las compras con IVA)
   const validarBtn = $("#comp-validar-iva");
@@ -5116,37 +5125,63 @@ function renderEstadoResultados(from, to, label) {
 
 function renderSumasSaldos(from, to, label) {
   const body = $("#conta-body");
-  // Sumas y saldos simplificado: cuentas patrimoniales (saldos hoy) + de
-  // resultado (acumulado del período), en formato Debe/Haber/Saldo.
+  // Cuentas con detalle de asiento: cada una lleva los ítems que la componen.
   const cuentas = [];
 
   // Patrimoniales: cada cuenta bancaria/caja con su saldo
   state.accounts.forEach(a => {
     const saldo = saldoCuentaAFecha(a);
-    cuentas.push({ nombre: a.name, tipo: "Activo", debe: saldo >= 0 ? saldo : 0, haber: saldo < 0 ? -saldo : 0 });
+    if (Math.abs(saldo) < 0.01) return;
+    cuentas.push({ nombre: a.name, tipo: "Activo", debe: saldo >= 0 ? saldo : 0, haber: saldo < 0 ? -saldo : 0,
+      detalle: [{ concepto: "Saldo a la fecha", monto: saldo }] });
   });
   // Inversiones (activo)
   const colocado = totalColocado("ARS");
-  if (colocado > 0) cuentas.push({ nombre: "Inversiones (colocado)", tipo: "Activo", debe: colocado, haber: 0 });
-  // Cuentas por cobrar / pagar (pendientes)
-  const porCobrar = state.comprobantes.filter(c=>c.tipo==="cobrar"&&c.estado!=="saldado").reduce((s,c)=>s+(c.monto||0),0);
-  const porPagar = state.comprobantes.filter(c=>c.tipo==="pagar"&&c.estado!=="saldado").reduce((s,c)=>s+(c.monto||0),0);
-  if (porCobrar > 0) cuentas.push({ nombre: "Deudores por ventas", tipo: "Activo", debe: porCobrar, haber: 0 });
-  if (porPagar > 0) cuentas.push({ nombre: "Proveedores", tipo: "Pasivo", debe: 0, haber: porPagar });
+  if (colocado > 0) cuentas.push({ nombre: "Inversiones (colocado)", tipo: "Activo", debe: colocado, haber: 0,
+    detalle: (state.investments||[]).filter(i=>i.estado==="activa"&&i.moneda!=="USD").map(i=>({concepto:i.label||i.tipo, monto:i.monto})) });
+  // Cuentas por cobrar / pagar (pendientes) con detalle de comprobantes
+  const cobrarPend = state.comprobantes.filter(c=>c.tipo==="cobrar"&&c.estado!=="saldado");
+  const pagarPend = state.comprobantes.filter(c=>c.tipo==="pagar"&&c.estado!=="saldado");
+  const porCobrar = cobrarPend.reduce((s,c)=>s+(c.monto||0),0);
+  const porPagar = pagarPend.reduce((s,c)=>s+(c.monto||0),0);
+  if (porCobrar > 0) cuentas.push({ nombre: "Deudores por ventas", tipo: "Activo", debe: porCobrar, haber: 0,
+    detalle: cobrarPend.map(c=>({concepto:`${c.contraparte} ${c.numero||""}`, monto:c.monto})) });
+  if (porPagar > 0) cuentas.push({ nombre: "Proveedores", tipo: "Pasivo", debe: 0, haber: porPagar,
+    detalle: pagarPend.map(c=>({concepto:`${c.contraparte} ${c.numero||""}`, monto:c.monto})) });
   // Crédito fiscal (retenciones/percepciones)
   const credFiscal = (state.retenciones||[]).reduce((s,r)=>s+(r.importe||0),0);
-  if (credFiscal > 0) cuentas.push({ nombre: "Crédito fiscal (ret./perc.)", tipo: "Activo", debe: credFiscal, haber: 0 });
+  if (credFiscal > 0) cuentas.push({ nombre: "Crédito fiscal (ret./perc.)", tipo: "Activo", debe: credFiscal, haber: 0,
+    detalle: (state.retenciones||[]).map(r=>({concepto:`${r.agente||""} ${r.impuesto||""}`, monto:r.importe})) });
 
-  // De resultado: ingresos (haber) y gastos (debe)
+  // De resultado: ingresos (haber) y gastos (debe), con detalle de rubro
   const acum = calcularResultados(from, to);
   Object.values(acum).forEach(r => {
     if (Math.abs(r.monto) < 0.01) return;
-    if (r.grupo === "ingresos") cuentas.push({ nombre: r.rubro, tipo: "Resultado +", debe: 0, haber: r.monto });
-    else cuentas.push({ nombre: r.rubro, tipo: "Resultado −", debe: Math.abs(r.monto), haber: 0 });
+    if (r.grupo === "ingresos") cuentas.push({ nombre: r.rubro, tipo: "Resultado +", debe: 0, haber: r.monto, detalle: [{concepto:"Devengado del período", monto:r.monto}] });
+    else cuentas.push({ nombre: r.rubro, tipo: "Resultado −", debe: Math.abs(r.monto), haber: 0, detalle: [{concepto:"Devengado del período", monto:Math.abs(r.monto)}] });
   });
 
-  const totalDebe = cuentas.reduce((s,c)=>s+c.debe,0);
-  const totalHaber = cuentas.reduce((s,c)=>s+c.haber,0);
+  // Totales antes del ajuste
+  let totalDebe = cuentas.reduce((s,c)=>s+c.debe,0);
+  let totalHaber = cuentas.reduce((s,c)=>s+c.haber,0);
+
+  // REGLA: el Sumas y Saldos debe cerrar en 0. La diferencia (Debe − Haber)
+  // es el Patrimonio Neto (capital + resultados). Se agrega una cuenta de PN
+  // que la absorbe, de modo que Debe = Haber siempre.
+  const dif = totalDebe - totalHaber;
+  if (Math.abs(dif) >= 0.01) {
+    if (dif > 0) {
+      // Más activo que pasivo → el PN va al Haber
+      cuentas.push({ nombre: "Patrimonio Neto (capital + resultados)", tipo: "Patrimonio", debe: 0, haber: dif,
+        detalle: [{concepto:"Ajuste de cierre (capital inicial + resultado acumulado)", monto:dif}], esPN: true });
+    } else {
+      cuentas.push({ nombre: "Patrimonio Neto (pérdida acumulada)", tipo: "Patrimonio", debe: -dif, haber: 0,
+        detalle: [{concepto:"Ajuste de cierre (pérdida acumulada)", monto:-dif}], esPN: true });
+    }
+  }
+  totalDebe = cuentas.reduce((s,c)=>s+c.debe,0);
+  totalHaber = cuentas.reduce((s,c)=>s+c.haber,0);
+  const cierra = Math.abs(totalDebe - totalHaber) < 1;
 
   body.innerHTML = `
     <div class="table-card conta-report">
@@ -5154,23 +5189,43 @@ function renderSumasSaldos(from, to, label) {
         <h3>Sumas y Saldos</h3>
         <span class="conta-period-label">${h(label)}</span>
       </div>
+      <div class="ss-alerta ${cierra?'ss-ok':'ss-err'}">
+        ${cierra ? "✓ El Sumas y Saldos cierra correctamente (Debe = Haber). La partida doble está balanceada." : "⚠ El Sumas y Saldos NO cierra. Revisá el detalle por asiento para encontrar la diferencia."}
+      </div>
       <div class="cf-table-scroll">
         <table class="ss-table">
           <thead><tr><th>Cuenta</th><th>Tipo</th><th>Debe</th><th>Haber</th></tr></thead>
           <tbody>
-            ${cuentas.map(c => `<tr>
-              <td>${h(c.nombre)}</td>
-              <td><span class="ss-tipo">${h(c.tipo)}</span></td>
+            ${cuentas.map((c,i) => `<tr class="ss-cuenta-row" data-ss="${i}">
+              <td><span class="ss-expand">▸</span> ${h(c.nombre)}</td>
+              <td><span class="ss-tipo ${c.esPN?'ss-tipo-pn':''}">${h(c.tipo)}</span></td>
               <td class="mono">${c.debe?money(c.debe):"—"}</td>
               <td class="mono">${c.haber?money(c.haber):"—"}</td>
-            </tr>`).join("")}
+            </tr>
+            <tr class="ss-detalle-row" data-ssdet="${i}" style="display:none"><td colspan="4">
+              <div class="ss-detalle">${(c.detalle||[]).map(d=>`<div class="ss-det-item"><span>${h(d.concepto)}</span><b class="mono">${money(d.monto)}</b></div>`).join("") || '<span class="muted">Sin detalle</span>'}</div>
+            </td></tr>`).join("")}
             <tr class="ss-total"><td colspan="2">TOTALES</td><td class="mono">${money(totalDebe)}</td><td class="mono">${money(totalHaber)}</td></tr>
+            <tr class="ss-dif ${cierra?'ss-ok':'ss-err'}"><td colspan="2">Diferencia (Debe − Haber)</td><td class="mono" colspan="2">${money(totalDebe-totalHaber)}</td></tr>
           </tbody>
         </table>
       </div>
       <div class="rpt-btns"><button class="btn-ghost sm" id="ss-xlsx">↓ Excel</button><button class="btn-ghost sm" id="ss-pdf">↓ PDF</button></div>
     </div>
-    <p class="conta-note">Sumas y saldos simplificado: activos y pasivos por su saldo actual, más las cuentas de resultado del período. Es una vista de gestión, no un balance legal — validá con tu contador.</p>`;
+    <p class="conta-note">Cierra en 0 gracias a la cuenta de Patrimonio Neto, que representa el capital inicial más los resultados acumulados. Tocá cualquier cuenta para ver el detalle de los asientos que la componen. Es una vista de gestión — validá con tu contador.</p>`;
+
+  // Expandir/colapsar detalle por asiento
+  $$(".ss-cuenta-row").forEach(row => {
+    row.onclick = () => {
+      const det = document.querySelector(`.ss-detalle-row[data-ssdet="${row.dataset.ss}"]`);
+      if (det) {
+        const vis = det.style.display !== "none";
+        det.style.display = vis ? "none" : "";
+        const exp = row.querySelector(".ss-expand");
+        if (exp) exp.textContent = vis ? "▸" : "▾";
+      }
+    };
+  });
 
   const ssX = $("#ss-xlsx"); if (ssX) ssX.onclick = () => exportarSumasSaldosXlsx(cuentas, label);
   const ssP = $("#ss-pdf"); if (ssP) ssP.onclick = () => exportarSumasSaldosPdf(cuentas, label);
@@ -5845,6 +5900,11 @@ function init() {
   $("#afip-modal-confirm").addEventListener("click", confirmarAfip);
   $("#afip-modal-close").addEventListener("click", closeAfipModal);
   $("#afip-modal-cancel").addEventListener("click", closeAfipModal);
+
+  // Modal de ajuste de Ganancias
+  const ajSave = $("#aj-modal-save"); if (ajSave) ajSave.addEventListener("click", guardarAjuste);
+  const ajClose = $("#aj-modal-close"); if (ajClose) ajClose.addEventListener("click", () => $("#ajuste-modal").classList.add("hidden"));
+  const ajCancel = $("#aj-modal-cancel"); if (ajCancel) ajCancel.addEventListener("click", () => $("#ajuste-modal").classList.add("hidden"));
 
   $("#prov-modal-save").addEventListener("click", saveProvFromModal);
   $("#prov-modal-close").addEventListener("click", closeProvModal);

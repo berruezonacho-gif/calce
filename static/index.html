@@ -454,6 +454,40 @@
 
   <!-- Modal: proveedor (directorio) -->
   <!-- Modal: importar de AFIP (Libro IVA Compras) -->
+  <!-- Modal: agregar ajuste de Ganancias -->
+  <div class="modal-overlay hidden" id="ajuste-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Agregar ajuste de Ganancias</h3>
+        <button class="modal-close" id="aj-modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="field"><span>Tipo de ajuste</span>
+          <select id="aj-tipo"></select>
+          <small id="aj-ayuda"></small>
+        </label>
+        <label class="field"><span>Detalle (opcional)</span>
+          <input type="text" id="aj-detalle" placeholder="Ej: Rodado Toyota, período 2024">
+        </label>
+        <div class="modal-row">
+          <label class="field"><span>Monto</span>
+            <div class="money-input"><em>$</em><input type="number" id="aj-monto" placeholder="0" step="10000"></div>
+          </label>
+          <label class="field"><span>Efecto en la base</span>
+            <select id="aj-dir">
+              <option value="resta">Resta (reduce la ganancia)</option>
+              <option value="suma">Suma (aumenta la ganancia)</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-ghost" id="aj-modal-cancel">Cancelar</button>
+        <button class="btn-primary" id="aj-modal-save">Agregar ajuste</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay hidden" id="afip-modal">
     <div class="modal modal-wide">
       <div class="modal-header">

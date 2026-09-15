@@ -1477,3 +1477,31 @@ input:focus, select:focus {
 .comp-iva-toggle span { font-family: var(--mono); font-size: 12px; color: var(--slate); }
 .comp-iva-cell input:checked + span { color: var(--green); font-weight: 600; }
 #comp-validar-iva { white-space: nowrap; }
+
+/* Escala y tramo de Ganancias */
+.af-regimen { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+.af-regimen label { font-size: 13px; color: var(--slate); display: flex; align-items: center; gap: 8px; }
+.af-regimen select { width: auto; padding: 6px 10px; font-size: 13px; }
+.af-escala-label { font-size: 11.5px; color: var(--slate-2); font-style: italic; }
+.af-tramo { margin-top: 14px; padding: 12px 14px; background: var(--paper); border-radius: 10px; font-size: 12.5px; color: var(--slate); }
+.af-tramo b { color: var(--navy); }
+.af-tramo-alerta { background: #FFF3E0; border: 1px solid #FFCC80; }
+.af-tramo-alerta b { color: #E65100; }
+.af-tramo-bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin-bottom: 8px; }
+.af-tramo-fill { height: 100%; background: linear-gradient(90deg, var(--teal), var(--accent)); border-radius: 4px; }
+.af-tramo-alerta .af-tramo-fill { background: linear-gradient(90deg, #FB8C00, #E65100); }
+
+/* Sumas y Saldos: alerta de cierre, detalle por asiento, PN */
+.ss-alerta { padding: 10px 14px; border-radius: 8px; font-size: 12.5px; font-weight: 600; margin-bottom: 14px; }
+.ss-alerta.ss-ok { background: #EAF6EC; color: #2E5B33; border: 1px solid #B8E0BC; }
+.ss-alerta.ss-err { background: #FBEDED; color: #B23A3A; border: 1px solid #E8B4B4; }
+.ss-cuenta-row { cursor: pointer; }
+.ss-cuenta-row:hover { background: var(--paper); }
+.ss-expand { font-size: 9px; color: var(--slate-2); }
+.ss-tipo-pn { background: #EAF2FF; color: var(--accent); }
+.ss-detalle-row td { padding: 0 !important; background: var(--paper); }
+.ss-detalle { padding: 8px 32px; }
+.ss-det-item { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--slate); padding: 3px 0; border-bottom: 1px dashed var(--line-2); }
+.ss-dif td { font-weight: 700; }
+.ss-dif.ss-ok td { color: var(--green); }
+.ss-dif.ss-err td { color: var(--red); }
