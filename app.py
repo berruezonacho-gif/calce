@@ -21,6 +21,7 @@ from data import cashflow
 from data import ons_static, sovereign_static, bonds
 from data import renta_fija
 from data import bymadata
+from data import inflacion
 from data import bcra
 from data import fci
 from data import importer
@@ -270,6 +271,18 @@ def mercado_variables(force: bool = False):
     """Variables de referencia: cotizaciones de dólares (MEP/CCL/blue/oficial)
     con brechas, inflación, CER, tasas del BCRA y bandas cambiarias."""
     return bcra.variables(force=force)
+
+
+@app.get("/api/inflacion/serie")
+def inflacion_serie(force: bool = False):
+    """Serie mensual del IPC (INDEC vía ArgentinaDatos) para ajustar a términos reales."""
+    return inflacion.serie_mensual(force=force)
+
+
+@app.get("/api/inflacion/factor")
+def inflacion_factor(desde: str, hasta: str, force: bool = False):
+    """Factor de ajuste por inflación entre dos meses (YYYY-MM)."""
+    return inflacion.factor_ajuste(desde, hasta, force=force)
 
 
 @app.get("/api/mercado/carry")

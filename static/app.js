@@ -1850,7 +1850,12 @@ function renderRendimiento() {
       <div class="rend-hero-main">
         <small>Generado por el excedente invertido · ${h(label)}</small>
         <b>${money(totalRend)}</b>
-        <span>sobre ${money(totalColocadoHist)} colocados</span>
+        <span>sobre ${money(totalColocadoHist)} colocados · <span class="rend-nom-tag">nominal</span></span>
+      </div>
+      <div class="rend-hero-real" id="rend-hero-real">
+        <small>En términos reales (ajustado por inflación)</small>
+        <b class="rend-real-val">calculando…</b>
+        <span class="rend-real-sub"></span>
       </div>
     </div>
 
@@ -1882,9 +1887,53 @@ function renderRendimiento() {
   const pb = $("#rend-pdf"); if (pb) pb.onclick = () => exportarRendimientoPDF(detalle, label, to);
 
   renderRendChart(invs, from, to);
+  calcularRendimientoReal(detalle, to);
 }
 
-// Gráfico de línea: rendimiento acumulado día por día en el período.
+// Ajusta el rendimiento a términos reales usando el IPC. El rendimiento de cada
+// inversión se descuenta por la inflación desde su colocación hasta hoy: lo que
+// generaste vale menos en pesos de hoy si la inflación se lo comió.
+async function calcularRendimientoReal(detalle, hastaISO) {
+  const host = $("#rend-hero-real");
+  if (!host) return;
+  const hastaMes = (hastaISO || new Date().toISOString().slice(0,10)).slice(0,7);
+  try {
+    // Traer la serie de inflación una vez
+    const res = await fetch("/api/inflacion/serie");
+    const data = await res.json();
+    if (!data.ok || !data.serie || !data.serie.length) throw new Error("sin serie");
+    const serie = data.serie;
+    // Factor de ajuste de un mes al mes de corte (encadena variaciones posteriores)
+    const factorDesde = (mes) => {
+      let f = 1.0;
+      serie.forEach(it => { if (it.fecha > mes && it.fecha <= hastaMes) f *= (1 + it.valor/100); });
+      return f;
+    };
+    // Valor real = colocado ajustado a hoy vs (colocado + rendimiento). Lo que
+    // realmente ganaste en poder adquisitivo = rendimiento nominal − lo que la
+    // inflación le restó al capital colocado.
+    let nominal = 0, real = 0;
+    detalle.forEach(x => {
+      const mesCol = (x.inv.fechaColocacion || hastaISO).slice(0,7);
+      const factor = factorDesde(mesCol);
+      const monto = parseFloat(x.inv.monto) || 0;
+      const valorFinalNominal = monto + x.rend;              // lo que tenés al final
+      const capitalAjustado = monto * factor;                // lo que "debería" valer solo para mantener poder
+      nominal += x.rend;
+      real += (valorFinalNominal - capitalAjustado);          // ganancia real (puede ser negativa)
+    });
+    const positivo = real >= 0;
+    host.querySelector(".rend-real-val").textContent = (positivo?"":"−") + money(Math.abs(real)).replace("-","");
+    host.querySelector(".rend-real-val").className = "rend-real-val " + (positivo ? "in" : "out");
+    const infPeriodo = nominal !== 0 ? ((nominal - real) / (detalle.reduce((s,x)=>s+(parseFloat(x.inv.monto)||0),0) || 1) * 100) : 0;
+    host.querySelector(".rend-real-sub").textContent = positivo
+      ? "Ganaste por encima de la inflación 👍"
+      : "La inflación se comió el rendimiento nominal";
+  } catch (e) {
+    // Sin datos de inflación (sandbox o API caída): ocultar el bloque real
+    host.style.display = "none";
+  }
+}
 function renderRendChart(invs, from, to) {
   const host = $("#rend-chart");
   if (!host) return;
@@ -2402,6 +2451,34 @@ function generarAlertas() {
     });
   }
 
+  // 5) Proximidad al salto de tramo de Ganancias (si el motor está cargado)
+  if (typeof calcularFiscal === "function" && typeof estimarGanancias === "function" && !((state.empresa||{}).esMonotributo)) {
+    try {
+      const hoyY = new Date();
+      const desde = `${hoyY.getFullYear()}-01-01`, hasta = `${hoyY.getFullYear()}-12-31`;
+      const fisc = calcularFiscal(desde, hasta);
+      const g = estimarGanancias(fisc);
+      if (g.faltaSiguiente != null && g.siguiente && g.baseAjustada > 0) {
+        const porc = (g.baseAjustada - g.tramo.desde) / (g.tramo.hasta - g.tramo.desde);
+        if (porc >= 0.95) {
+          alertas.push({
+            nivel: "critico", icono: "🔴",
+            titulo: "Al límite del tramo de Ganancias",
+            detalle: `Tu ganancia del año está al ${(porc*100).toFixed(0)}% del tramo del ${(g.tramo.alicuota*100).toFixed(0)}%. Te faltan ${moneyC(g.faltaSiguiente,"ARS")} para tributar al ${(g.siguiente.alicuota*100).toFixed(0)}%. Consultá a tu contador antes del cierre.`,
+            accion: "analisis",
+          });
+        } else if (porc >= 0.8) {
+          alertas.push({
+            nivel: "alto", icono: "🟡",
+            titulo: "Cerca de saltar de tramo en Ganancias",
+            detalle: `Tu ganancia del año está al ${(porc*100).toFixed(0)}% del tramo del ${(g.tramo.alicuota*100).toFixed(0)}%. Planificá con tu contador para no cruzar al ${(g.siguiente.alicuota*100).toFixed(0)}%.`,
+            accion: "analisis",
+          });
+        }
+      }
+    } catch (e) { /* si algo falla, no romper el dashboard */ }
+  }
+
   // Orden por nivel
   const peso = { critico: 0, alto: 1, medio: 2 };
   return alertas.sort((a,b)=>peso[a.nivel]-peso[b.nivel]);
@@ -2721,7 +2798,7 @@ function renderComprobantes() {
     </div>
 
     <div class="table-card" style="margin-top:16px">
-      <div class="chart-head"><h2>${esCobrar?"Facturas por cobrar":"Facturas por pagar"}</h2>${!esCobrar && comps.some(c=>(c.iva||0)>0) ? `<button class="btn-ghost sm" id="comp-validar-iva">✓ Validar todo el IVA del período</button>` : ""}</div>
+      <div class="chart-head"><h2>${esCobrar?"Facturas por cobrar":"Facturas por pagar"}</h2>${!esCobrar ? `<div class="rpt-btns">${comps.some(c=>(c.iva||0)>0)?`<button class="btn-ghost sm" id="comp-validar-iva">✓ Validar todo el IVA</button>`:""}<button class="btn-ghost sm" id="comp-validar-gan">✓ Marcar todo deducible</button></div>` : ""}</div>
       ${!esCobrar && comps.some(c=>(c.iva||0)>0) ? `<p class="comp-iva-hint">Tildá el IVA de cada compra que tu contador confirmó como computable. Solo el IVA tildado se descuenta en tu posición de IVA (Resultado económico).</p>` : ""}
       ${orden.length ? `<div class="cf-table-scroll"><table class="cf-table">
         <thead><tr><th>${esCobrar?"Cliente":"Proveedor"}</th><th>Monto</th>${!esCobrar?"<th>IVA computable</th><th>Deducible Gcias.</th>":""}<th>Emisión</th><th>Vencimiento</th><th>Estado</th><th></th></tr></thead>
@@ -2740,7 +2817,7 @@ function renderComprobantes() {
   });
   $$(".comp-gan-chk").forEach(chk => chk.onchange = () => {
     const c = state.comprobantes.find(x => x.id === chk.dataset.ganchk);
-    if (c) { c.ganComputable = chk.checked; saveState(); }
+    if (c) { c.ganComputable = chk.checked; c.ganComputableManual = true; saveState(); }
   });
   // Validar todo el IVA del período (todas las compras con IVA)
   const validarBtn = $("#comp-validar-iva");
@@ -2751,6 +2828,17 @@ function renderComprobantes() {
     const accion = todosValidados ? "desmarcar" : "marcar";
     if (!confirm(`¿${accion==="marcar"?"Validar":"Quitar la validación de"} el IVA de ${conIva.length} compras?\n\nSolo hacelo si tu contador confirmó que son computables.`)) return;
     conIva.forEach(c => c.ivaComputable = !todosValidados);
+    saveState();
+    renderComprobantes();
+  };
+  // Marcar todo deducible a Ganancias
+  const validarGanBtn = $("#comp-validar-gan");
+  if (validarGanBtn) validarGanBtn.onclick = () => {
+    const compras = state.comprobantes.filter(c => c.tipo === "pagar");
+    const yaMarcados = compras.filter(c => c.ganComputable === true).length;
+    const todosMarcados = yaMarcados === compras.length;
+    if (!confirm(`¿${todosMarcados?"Quitar la marca de deducible de":"Marcar como deducibles"} ${compras.length} compras?\n\nSolo hacelo si tu contador confirmó que son gastos vinculados a la actividad.`)) return;
+    compras.forEach(c => c.ganComputable = !todosMarcados);
     saveState();
     renderComprobantes();
   };
@@ -5153,12 +5241,33 @@ function renderSumasSaldos(from, to, label) {
   if (credFiscal > 0) cuentas.push({ nombre: "Crédito fiscal (ret./perc.)", tipo: "Activo", debe: credFiscal, haber: 0,
     detalle: (state.retenciones||[]).map(r=>({concepto:`${r.agente||""} ${r.impuesto||""}`, monto:r.importe})) });
 
-  // De resultado: ingresos (haber) y gastos (debe), con detalle de rubro
+  // De resultado: ingresos (haber) y gastos (debe), con detalle REAL de cada
+  // comprobante/movimiento que compone el rubro (no solo "devengado del período").
   const acum = calcularResultados(from, to);
+  const dentroP = (iso) => iso && iso >= from && iso <= to;
+  // Detalle por rubro: recorrer comprobantes y movimientos como en calcularResultados
+  const detallePorRubro = {}; // rubro -> [{concepto, fecha, monto}]
+  const pushDet = (rubro, item) => { (detallePorRubro[rubro] = detallePorRubro[rubro] || []).push(item); };
+  state.comprobantes.forEach(c => {
+    if (!dentroP(c.emision)) return;
+    const tiene = (c.neto != null) || (c.noGravado != null) || (c.exento != null);
+    const base = tiene ? ((c.neto||0)+(c.noGravado||0)+(c.exento||0)) : (c.monto||0);
+    if (Math.abs(base) < 0.01) return;
+    const rubro = c.tipo === "cobrar" ? "Ventas" : rubroDe(c.categoria||"proveedores").rubro;
+    pushDet(rubro, { concepto: `${c.contraparte||"—"} ${c.numero||""}`.trim(), fecha: c.emision, monto: Math.abs(base) });
+  });
+  state.movements.forEach(m => {
+    if (m.compId || m.invId || m.movTipo === "inversion" || m.movTipo === "rescate") return;
+    if (!m.amount || !dentroP(m.date)) return;
+    const cat = movCategoria(m); if (!cat) return;
+    const rubro = rubroDe(cat).rubro;
+    pushDet(rubro, { concepto: m.label || "(sin concepto)", fecha: m.date, monto: Math.abs(m.amount) });
+  });
   Object.values(acum).forEach(r => {
     if (Math.abs(r.monto) < 0.01) return;
-    if (r.grupo === "ingresos") cuentas.push({ nombre: r.rubro, tipo: "Resultado +", debe: 0, haber: r.monto, detalle: [{concepto:"Devengado del período", monto:r.monto}] });
-    else cuentas.push({ nombre: r.rubro, tipo: "Resultado −", debe: Math.abs(r.monto), haber: 0, detalle: [{concepto:"Devengado del período", monto:Math.abs(r.monto)}] });
+    const det = (detallePorRubro[r.rubro] || []).sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||""));
+    if (r.grupo === "ingresos") cuentas.push({ nombre: r.rubro, tipo: "Resultado +", debe: 0, haber: r.monto, detalle: det.length?det:[{concepto:"Devengado del período", monto:r.monto}] });
+    else cuentas.push({ nombre: r.rubro, tipo: "Resultado −", debe: Math.abs(r.monto), haber: 0, detalle: det.length?det:[{concepto:"Devengado del período", monto:Math.abs(r.monto)}] });
   });
 
   // Totales antes del ajuste
@@ -5905,6 +6014,10 @@ function init() {
   const ajSave = $("#aj-modal-save"); if (ajSave) ajSave.addEventListener("click", guardarAjuste);
   const ajClose = $("#aj-modal-close"); if (ajClose) ajClose.addEventListener("click", () => $("#ajuste-modal").classList.add("hidden"));
   const ajCancel = $("#aj-modal-cancel"); if (ajCancel) ajCancel.addEventListener("click", () => $("#ajuste-modal").classList.add("hidden"));
+  // Modal de perfil impositivo
+  const pfSave = $("#pf-modal-save"); if (pfSave) pfSave.addEventListener("click", guardarPerfil);
+  const pfClose = $("#pf-modal-close"); if (pfClose) pfClose.addEventListener("click", () => $("#perfil-modal").classList.add("hidden"));
+  const pfCancel = $("#pf-modal-cancel"); if (pfCancel) pfCancel.addEventListener("click", () => $("#perfil-modal").classList.add("hidden"));
 
   $("#prov-modal-save").addEventListener("click", saveProvFromModal);
   $("#prov-modal-close").addEventListener("click", closeProvModal);

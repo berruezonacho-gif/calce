@@ -363,6 +363,44 @@ async function exportarSumasSaldosXlsx(cuentas, label) {
   }
   adv.alignment = { wrapText:true, vertical:"top" };
   ws.getRow(r).height = 40;
+
+  // ── Una HOJA por cada cuenta/asiento con su detalle completo ──
+  // Nombre de hoja seguro (Excel: máx 31 chars, sin caracteres especiales)
+  const usados = {};
+  const nombreHoja = (base) => {
+    let n = base.replace(/[\\\/\?\*\[\]:]/g, " ").slice(0, 28).trim();
+    if (usados[n]) { let i=2; while(usados[`${n} ${i}`]) i++; n = `${n} ${i}`; }
+    usados[n] = true; return n;
+  };
+  cuentas.forEach((c, ci) => {
+    const det = c.detalle || [];
+    if (det.length === 0) return;
+    const wsA = wb.addWorksheet(nombreHoja(`${ci+1}. ${c.nombre}`));
+    wsA.columns = [{width:48},{width:14},{width:18}];
+    let ra = 1;
+    // Encabezado de la hoja del asiento
+    const t = wsA.getRow(ra); t.getCell(1).value = c.nombre; _xlsTitle(t.getCell(1));
+    wsA.mergeCells(ra,1,ra,3); ra++;
+    const sub = wsA.getRow(ra);
+    sub.getCell(1).value = `Tipo: ${c.tipo}  ·  ${c.debe?"Debe "+_money(c.debe):"Haber "+_money(c.haber)}  ·  ${det.length} ítems`;
+    sub.getCell(1).font = { size:10, italic:true, color:{argb:"FF787878"} };
+    wsA.mergeCells(ra,1,ra,3); ra += 2;
+    // Header de la tabla de detalle
+    const h = wsA.getRow(ra); ["Concepto","Fecha","Importe"].forEach((x,i)=>{ h.getCell(i+1).value=x; _xlsHeader(h.getCell(i+1)); }); ra++;
+    let totItems = 0;
+    det.forEach((d,i) => {
+      const row = wsA.getRow(ra);
+      row.getCell(1).value = d.concepto || "—";
+      row.getCell(2).value = d.fecha || "—";
+      const mc = row.getCell(3); mc.value = d.monto; mc.numFmt = XLS_MONEY; mc.alignment = { horizontal:"right" };
+      if (i%2) row.eachCell(cc=>{ cc.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFF7FAFC"}}; });
+      totItems += (d.monto||0); ra++;
+    });
+    // Total del asiento
+    const tr2 = wsA.getRow(ra); tr2.getCell(1).value = "TOTAL DEL ASIENTO"; wsA.mergeCells(ra,1,ra,2);
+    _xlsSubtotal(tr2.getCell(1)); const mt = tr2.getCell(3); mt.value = totItems; mt.numFmt = XLS_MONEY; _xlsSubtotal(mt); mt.alignment={horizontal:"right"};
+  });
+
   await _xlsSave(wb, `Sumas_y_Saldos_${label.replace(/\s+/g,"_")}.xlsx`);
 }
 

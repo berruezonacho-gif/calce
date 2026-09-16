@@ -74,47 +74,148 @@ function calcularFiscal(from, to) {
 // Estimación de Ganancias con ajustes cargables (orientativa)
 // Escalas de Ganancias vigentes 2026 (ARCA). Montos actualizados por IPC.
 // Cada tramo: {hasta, alicuota, fijo} — impuesto = fijo + alicuota*(base − desde).
-const ESCALAS_GANANCIAS = {
-  sociedad: {
-    label: "Sociedad (SA, SRL) — Art. 73",
-    tramos: [
-      { desde: 0,           hasta: 133200000,  alicuota: 0.25, fijo: 0 },
-      { desde: 133200000,   hasta: 1332000000, alicuota: 0.30, fijo: 33300000 },
-      { desde: 1332000000,  hasta: Infinity,   alicuota: 0.35, fijo: 392940000 },
-    ],
-  },
-  persona: {
-    label: "Persona humana — Art. 94 (escala progresiva)",
-    // Escala anualizada aproximada 2026 (referencia; se actualiza por semestre)
-    tramos: [
-      { desde: 0,          hasta: 3800000,   alicuota: 0.05, fijo: 0 },
-      { desde: 3800000,    hasta: 7600000,   alicuota: 0.09, fijo: 190000 },
-      { desde: 7600000,    hasta: 11400000,  alicuota: 0.12, fijo: 532000 },
-      { desde: 11400000,   hasta: 15200000,  alicuota: 0.15, fijo: 988000 },
-      { desde: 15200000,   hasta: 22800000,  alicuota: 0.19, fijo: 1558000 },
-      { desde: 22800000,   hasta: 30400000,  alicuota: 0.23, fijo: 3002000 },
-      { desde: 30400000,   hasta: 45600000,  alicuota: 0.27, fijo: 4750000 },
-      { desde: 45600000,   hasta: 60800000,  alicuota: 0.31, fijo: 8854000 },
-      { desde: 60800000,   hasta: Infinity,  alicuota: 0.35, fijo: 13566000 },
-    ],
+// ═══ MOTOR DE REGLAS DE DEDUCIBILIDAD DE GANANCIAS ═══════════════
+// Mapea cada categoría de gasto a su tratamiento en Ganancias. GENERAL
+// (agnóstico de rubro): el tratamiento depende de la naturaleza del gasto.
+// Solo aplica a Régimen General (RI/sociedades), no a Monotributo.
+// tratamiento: "total" (deducible sin condición) | "condicionado" (requiere
+// dato del perfil o tiene tope) | "no_deducible" | "bien_uso" (se amortiza).
+const REGLAS_DEDUCIBILIDAD = {
+  // Deducibles totales sin condición
+  sueldos:       { tratamiento: "total", nota: "Sueldos y jornales — deducible total" },
+  cargas:        { tratamiento: "total", nota: "Cargas sociales — deducible total" },
+  alquileres:    { tratamiento: "total", nota: "Alquiler afectado a la actividad — deducible total" },
+  proveedores:   { tratamiento: "total", nota: "Compras/servicios necesarios — deducible total" },
+  materiales:    { tratamiento: "total", nota: "Insumos/mercadería — deducible total" },
+  subcontratos:  { tratamiento: "total", nota: "Honorarios a terceros por servicios necesarios — deducible total" },
+  servicios:     { tratamiento: "total", nota: "Servicios (luz/gas/internet) afectados — deducible total" },
+  // Condicionadas
+  financiacion:  { tratamiento: "total", nota: "Intereses de financiación de la actividad — deducible (revisar tope de intereses)" },
+  // No deducibles
+  impuestos:     { tratamiento: "no_deducible", nota: "El propio Impuesto a las Ganancias y multas/recargos NO son deducibles (IIBB e IVA sí, según corresponda — revisar con contador)" },
+  // Sin regla clara → queda manual
+  otros_egresos: { tratamiento: "manual", nota: "Revisar la naturaleza del gasto con el contador" },
+  representacion:{ tratamiento: "condicionado", condicion: "representacion", tope: "1,5% de sueldos", nota: "Gastos de representación — deducible con tope del 1,5% de sueldos pagados" },
+  automovil:     { tratamiento: "condicionado", condicion: "vehiculos", tope: "tope anual por unidad", nota: "Automóvil no afectado 100% — deducible con tope anual por unidad (confirmar valor con contador)" },
+  donaciones:    { tratamiento: "condicionado", condicion: "donaciones", tope: "5% de ganancia neta", nota: "Donaciones — deducible con tope del 5% de la ganancia neta" },
+};
+
+// Perfil impositivo del cliente (del Formulario de Alta Impositiva)
+function perfilImpositivo() {
+  const e = state.empresa || {};
+  return {
+    regimenFiscal: e.regimenGan === "persona" ? "persona" : (e.regimenFiscal || "sociedad"),
+    esMonotributo: e.esMonotributo === true,
+    tieneVehiculos: e.tieneVehiculos === true,
+    incurreRepresentacion: e.incurreRepresentacion === true,
+    cantidadEmpleados: e.cantidadEmpleados || 0,
+    realizaDonaciones: e.realizaDonaciones === true,
+    esSociedadConDirectores: e.esSociedadConDirectores === true,
+    tieneSeguroVidaTitular: e.tieneSeguroVidaTitular === true,
+  };
+}
+
+// Sugerencia automática de deducibilidad para un comprobante de compra.
+// Devuelve {sugerido: true/false/null, motivo}. null = no hay regla, queda manual.
+function sugerenciaDeducible(comp) {
+  const perf = perfilImpositivo();
+  if (perf.esMonotributo) return { sugerido: null, motivo: "Monotributo: no determina Ganancias por este régimen." };
+  const cat = comp.categoria || "proveedores";
+  const regla = REGLAS_DEDUCIBILIDAD[cat];
+  if (!regla) return { sugerido: null, motivo: "Sin regla — revisar con el contador." };
+  if (regla.tratamiento === "total") return { sugerido: true, motivo: regla.nota };
+  if (regla.tratamiento === "no_deducible") return { sugerido: false, motivo: regla.nota };
+  if (regla.tratamiento === "bien_uso") return { sugerido: false, motivo: "Bien de uso: no se deduce de una vez, se amortiza." };
+  if (regla.tratamiento === "condicionado") {
+    // ¿El perfil habilita la condición?
+    const habilitado = (regla.condicion === "representacion" && perf.incurreRepresentacion) ||
+                       (regla.condicion === "vehiculos" && perf.tieneVehiculos) ||
+                       (regla.condicion === "donaciones" && perf.realizaDonaciones);
+    return { sugerido: habilitado, motivo: regla.nota + (habilitado ? "" : " (no marcado en el perfil impositivo)") };
+  }
+  return { sugerido: null, motivo: regla.nota || "Revisar con el contador." };
+}
+
+// Aplica las sugerencias automáticas a los comprobantes que no fueron tocados
+// manualmente. Marca ganComputable según la regla, dejando registro del motivo.
+function aplicarReglasDeducibilidad() {
+  let n = 0;
+  (state.comprobantes || []).filter(c => c.tipo === "pagar").forEach(c => {
+    if (c.ganComputableManual === true) return; // el usuario ya decidió, no tocar
+    const sug = sugerenciaDeducible(c);
+    if (sug.sugerido !== null) {
+      c.ganComputable = sug.sugerido;
+      c.ganMotivo = sug.motivo;
+      n++;
+    }
+  });
+  return n;
+}
+
+// Escalas de Ganancias VERSIONADAS por año fiscal. Cambian todos los años
+// (actualización por IPC), por eso se guardan como tabla por año en vez de
+// hardcodeadas. Se puede sobreescribir/agregar un año desde state.escalasGan.
+// Fuente: ARCA. Montos oficiales del ejercicio.
+const ESCALAS_GANANCIAS_POR_ANIO = {
+  2026: {
+    sociedad: {
+      label: "Sociedad (SA, SRL) — Art. 73",
+      vigencia: "Ejercicios iniciados desde 1/1/2026",
+      tramos: [
+        { desde: 0,             hasta: 133514185.74,   alicuota: 0.25, fijo: 0 },
+        { desde: 133514185.74,  hasta: 1335141857.38,  alicuota: 0.30, fijo: 33378546.44 },
+        { desde: 1335141857.38, hasta: Infinity,       alicuota: 0.35, fijo: 393866847.93 },
+      ],
+    },
+    persona: {
+      label: "Persona humana — Art. 94 (escala anual jul-dic 2026)",
+      vigencia: "Segundo semestre 2026",
+      tramos: [
+        { desde: 0,          hasta: 3800000,   alicuota: 0.05, fijo: 0 },
+        { desde: 3800000,    hasta: 7600000,   alicuota: 0.09, fijo: 190000 },
+        { desde: 7600000,    hasta: 11400000,  alicuota: 0.12, fijo: 532000 },
+        { desde: 11400000,   hasta: 15200000,  alicuota: 0.15, fijo: 988000 },
+        { desde: 15200000,   hasta: 22800000,  alicuota: 0.19, fijo: 1558000 },
+        { desde: 22800000,   hasta: 30400000,  alicuota: 0.23, fijo: 3002000 },
+        { desde: 30400000,   hasta: 45600000,  alicuota: 0.27, fijo: 4750000 },
+        { desde: 45600000,   hasta: 60800000,  alicuota: 0.31, fijo: 8854000 },
+        { desde: 60800000,   hasta: Infinity,  alicuota: 0.35, fijo: 13566000 },
+      ],
+    },
   },
 };
 
+// Devuelve la escala vigente para un año fiscal y régimen. Prioriza overrides
+// del usuario (state.escalasGan[año]) sobre la tabla oficial. Si el año pedido
+// no existe, usa el año más reciente disponible (las escalas no bajan).
+function escalaVigente(anio, regimen) {
+  const custom = (state.escalasGan && state.escalasGan[anio]) || null;
+  if (custom && custom[regimen]) return custom[regimen];
+  if (ESCALAS_GANANCIAS_POR_ANIO[anio] && ESCALAS_GANANCIAS_POR_ANIO[anio][regimen]) {
+    return ESCALAS_GANANCIAS_POR_ANIO[anio][regimen];
+  }
+  // Año más reciente disponible ≤ el pedido (o el mayor si el pedido es viejo)
+  const anios = Object.keys(ESCALAS_GANANCIAS_POR_ANIO).map(Number).sort((a,b)=>a-b);
+  let elegido = anios[anios.length-1];
+  for (const a of anios) { if (a <= anio) elegido = a; }
+  return ESCALAS_GANANCIAS_POR_ANIO[elegido][regimen];
+}
+
 // Calcula el impuesto por escala y en qué tramo cae, más cuánto falta para el siguiente.
-function calcularEscala(base, regimen) {
-  const esc = ESCALAS_GANANCIAS[regimen] || ESCALAS_GANANCIAS.sociedad;
-  if (base <= 0) return { impuesto: 0, tramo: esc.tramos[0], idx: 0, marginal: esc.tramos[0].alicuota, faltaSiguiente: null, escala: esc };
+function calcularEscala(base, regimen, anio) {
+  const y = anio || new Date().getFullYear();
+  const esc = escalaVigente(y, regimen) || escalaVigente(y, "sociedad");
+  if (base <= 0) return { impuesto: 0, tramo: esc.tramos[0], idx: 0, marginal: esc.tramos[0].alicuota, faltaSiguiente: null, escala: esc, anio: y };
   let idx = esc.tramos.findIndex(t => base <= t.hasta);
   if (idx === -1) idx = esc.tramos.length - 1;
   const t = esc.tramos[idx];
   const impuesto = t.fijo + t.alicuota * (base - t.desde);
-  // Cuánto falta para saltar al tramo siguiente (donde la ganancia marginal paga más)
   let faltaSiguiente = null, siguiente = null;
   if (idx < esc.tramos.length - 1) {
     faltaSiguiente = t.hasta - base;
     siguiente = esc.tramos[idx + 1];
   }
-  return { impuesto, tramo: t, idx, marginal: t.alicuota, faltaSiguiente, siguiente, escala: esc };
+  return { impuesto, tramo: t, idx, marginal: t.alicuota, faltaSiguiente, siguiente, escala: esc, anio: y };
 }
 
 function estimarGanancias(fiscal) {
@@ -124,14 +225,16 @@ function estimarGanancias(fiscal) {
     const monto = parseFloat(a.monto) || 0;
     baseAjustada += (a.direccion === "resta") ? -monto : monto;
   });
-  const esc = calcularEscala(Math.max(0, baseAjustada), regimen);
+  // Año fiscal: el del cierre de ejercicio (o el corriente si cierra en diciembre)
+  const anioFiscal = (fiscal.to ? new Date(fiscal.to+"T00:00:00").getFullYear() : new Date().getFullYear());
+  const esc = calcularEscala(Math.max(0, baseAjustada), regimen, anioFiscal);
   const impuestoEstimado = Math.max(0, esc.impuesto);
   const aPagar = Math.max(0, impuestoEstimado - fiscal.retGanancias);
   const tasaEfectiva = baseAjustada > 0 ? impuestoEstimado / baseAjustada : 0;
   return {
     regimen, baseAjustada, impuestoEstimado, aPagar, retGanancias: fiscal.retGanancias,
     tramo: esc.tramo, idx: esc.idx, marginal: esc.marginal, faltaSiguiente: esc.faltaSiguiente,
-    siguiente: esc.siguiente, escala: esc.escala, tasaEfectiva,
+    siguiente: esc.siguiente, escala: esc.escala, tasaEfectiva, anioFiscal: esc.anio,
   };
 }
 
@@ -168,11 +271,16 @@ function recomendacionesFiscales(fiscal, gan) {
   if (gan.faltaSiguiente != null && gan.siguiente && gan.baseAjustada > 0) {
     const t = gan.tramo, sig = gan.siguiente;
     const porcTramo = (gan.baseAjustada - t.desde) / (t.hasta - t.desde);
-    if (porcTramo >= 0.8) {
-      add("GANANCIAS", "Cerca de saltar de tramo",
-        `Tu ganancia estimada (${money2(gan.baseAjustada)}) está a ${money2(gan.faltaSiguiente)} de superar el tramo del ${(t.alicuota*100).toFixed(0)}%. El excedente pasaría a tributar al ${(sig.alicuota*100).toFixed(0)}%.`,
-        "Si estás por cerrar el ejercicio, evaluá con tu contador diferir ingresos o adelantar gastos deducibles para no saltar de tramo.", "alta",
-        ["proyección de resultado", "gastos deducibles pendientes", "cronograma de facturación"]);
+    if (porcTramo >= 0.95) {
+      add("GANANCIAS", "🔴 Al límite del tramo",
+        `Tu ganancia (${money2(gan.baseAjustada)}) ya está al ${(porcTramo*100).toFixed(0)}% del tramo del ${(t.alicuota*100).toFixed(0)}%: te faltan solo ${money2(gan.faltaSiguiente)} para que el excedente pase a tributar al ${(sig.alicuota*100).toFixed(0)}%.`,
+        "URGENTE si estás cerca del cierre: hablá YA con tu contador para diferir ingresos o adelantar gastos deducibles antes de cruzar el tramo.", "alta",
+        ["resultado del período", "gastos deducibles pendientes", "cronograma de facturación"]);
+    } else if (porcTramo >= 0.8) {
+      add("GANANCIAS", "🟡 Cerca de saltar de tramo",
+        `Tu ganancia (${money2(gan.baseAjustada)}) está al ${(porcTramo*100).toFixed(0)}% del tramo del ${(t.alicuota*100).toFixed(0)}%. Te faltan ${money2(gan.faltaSiguiente)} para que el excedente tribute al ${(sig.alicuota*100).toFixed(0)}%.`,
+        "Empezá a planificar con tu contador: diferir ingresos o adelantar gastos deducibles puede evitar el salto de tramo.", "media",
+        ["resultado del período", "gastos deducibles pendientes"]);
     }
   }
   // Cash vs mínimo (colchón definido en prefs)
@@ -245,7 +353,7 @@ function renderAnalisisFiscal() {
             <option value="persona" ${gan.regimen==="persona"?"selected":""}>Persona humana</option>
           </select>
         </label>
-        <span class="af-escala-label">${h(gan.escala.label)}</span>
+        <span class="af-escala-label">${h(gan.escala.label)}${gan.anioFiscal?` · escala ${gan.anioFiscal}`:""}${gan.escala.vigencia?` (${h(gan.escala.vigencia)})`:""}</span>
       </div>
       <div class="af-ganlist">
         <div class="af-ivarow"><span>Resultado documental (ventas − compras, netos)</span><b>${money(fiscal.resultadoDocumental)}</b></div>
@@ -256,12 +364,24 @@ function renderAnalisisFiscal() {
         <div class="af-ivarow"><span>− Retenciones de Ganancias sufridas</span><b class="in">−${money(gan.retGanancias)}</b></div>
         <div class="af-ivarow total ${gan.aPagar>0?'pos':'neg'}"><span>${gan.aPagar>0?'Estimado a pagar':'Sin saldo a pagar'}</span><b>${money(gan.aPagar)}</b></div>
       </div>
-      ${gan.faltaSiguiente!=null && gan.siguiente ? `<div class="af-tramo ${(gan.baseAjustada-gan.tramo.desde)/(gan.tramo.hasta-gan.tramo.desde)>=0.8?'af-tramo-alerta':''}">
-        <div class="af-tramo-bar"><div class="af-tramo-fill" style="width:${Math.min(100,Math.round((gan.baseAjustada-gan.tramo.desde)/(gan.tramo.hasta-gan.tramo.desde)*100))}%"></div></div>
-        <span>Estás en el tramo del <b>${(gan.tramo.alicuota*100).toFixed(0)}%</b>. Te faltan <b>${money(gan.faltaSiguiente)}</b> de ganancia para saltar al <b>${(gan.siguiente.alicuota*100).toFixed(0)}%</b>.</span>
-      </div>` : `<div class="af-tramo"><span>Estás en el tramo máximo (${(gan.tramo.alicuota*100).toFixed(0)}%).</span></div>`}
-      <button class="btn-ghost sm" id="af-add-ajuste">+ Agregar ajuste (amortización, quebranto…)</button>
-      <p class="af-nota">El resultado documental no es la base fiscal de Ganancias. Los ajustes acercan la estimación a la realidad, pero la declaración final la determina tu contador con el balance. Escala vigente 2026 (ARCA).</p>
+      ${gan.faltaSiguiente!=null && gan.siguiente ? (() => {
+        const porc = (gan.baseAjustada-gan.tramo.desde)/(gan.tramo.hasta-gan.tramo.desde);
+        const nivel = porc>=0.95 ? "rojo" : porc>=0.8 ? "amarillo" : "ok";
+        const ico = nivel==="rojo" ? "🔴" : nivel==="amarillo" ? "🟡" : "";
+        return `<div class="af-tramo af-tramo-${nivel}">
+          <div class="af-tramo-bar"><div class="af-tramo-fill" style="width:${Math.min(100,Math.round(porc*100))}%"></div></div>
+          <div class="af-tramo-txt">
+            <span>${ico} Estás al <b>${(porc*100).toFixed(0)}%</b> del tramo del <b>${(gan.tramo.alicuota*100).toFixed(0)}%</b>. Te faltan <b>${money(gan.faltaSiguiente)}</b> para saltar al <b>${(gan.siguiente.alicuota*100).toFixed(0)}%</b>.</span>
+            ${nivel==="rojo" ? '<span class="af-tramo-msg">⚠ Al límite. Si vas a cerrar el ejercicio, hablá con tu contador antes de cruzar el tramo.</span>' : nivel==="amarillo" ? '<span class="af-tramo-msg">Empezá a planificar: diferir ingresos o adelantar gastos deducibles puede evitar el salto.</span>' : ''}
+          </div>
+        </div>`;
+      })() : `<div class="af-tramo"><span>Estás en el tramo máximo (${(gan.tramo.alicuota*100).toFixed(0)}%).</span></div>`}
+      <div class="rpt-btns" style="margin-top:8px">
+        <button class="btn-ghost sm" id="af-add-ajuste">+ Agregar ajuste (amortización, quebranto…)</button>
+        <button class="btn-ghost sm" id="af-aplicar-reglas">⚙ Aplicar reglas de deducibilidad</button>
+        <button class="btn-ghost sm" id="af-perfil">📋 Perfil impositivo</button>
+      </div>
+      <p class="af-nota">El resultado documental no es la base fiscal de Ganancias. Los ajustes acercan la estimación a la realidad, pero la declaración final la determina tu contador con el balance. Escala vigente 2026 (ARCA). Las reglas de deducibilidad pre-marcan cada gasto según su naturaleza — el contador solo confirma.</p>
     </div>
 
     <!-- Recomendaciones explicables -->
@@ -292,6 +412,17 @@ function renderAnalisisFiscal() {
   renderGanAjustes();
   const addBtn = $("#af-add-ajuste");
   if (addBtn) addBtn.onclick = () => abrirModalAjuste();
+  const reglasBtn = $("#af-aplicar-reglas");
+  if (reglasBtn) reglasBtn.onclick = () => {
+    if (perfilImpositivo().esMonotributo) { alert("El cliente es Monotributo — no determina Ganancias por este régimen."); return; }
+    if (!confirm("Aplicar las reglas de deducibilidad a todas las compras.\n\nCada gasto se pre-marca como deducible o no según su naturaleza. Los que ya marcaste a mano no se tocan. El contador confirma después.")) return;
+    const n = aplicarReglasDeducibilidad();
+    saveState();
+    alert(`Se aplicaron reglas a ${n} comprobantes. Revisalos en Cobranzas y Pagos → Por pagar.`);
+    renderAnalisisFiscal();
+  };
+  const perfilBtn = $("#af-perfil");
+  if (perfilBtn) perfilBtn.onclick = () => abrirModalPerfil();
 }
 
 // Tipos de ajuste típicos del puente contable-fiscal
@@ -349,4 +480,35 @@ function renderGanAjustes() {
     state.ganAjustes = state.ganAjustes.filter(a => a.id !== b.dataset.aj);
     saveState(); renderAnalisisFiscal();
   });
+}
+
+// ── Modal de Perfil Impositivo (Formulario de Alta) ──────
+function abrirModalPerfil() {
+  const m = $("#perfil-modal");
+  if (!m) return;
+  const e = state.empresa || {};
+  $("#pf-regimen").value = e.regimenFiscal || (e.regimenGan==="persona"?"persona":"sociedad");
+  $("#pf-mono").checked = e.esMonotributo === true;
+  $("#pf-vehiculos").checked = e.tieneVehiculos === true;
+  $("#pf-representacion").checked = e.incurreRepresentacion === true;
+  $("#pf-empleados").value = e.cantidadEmpleados || "";
+  $("#pf-donaciones").checked = e.realizaDonaciones === true;
+  $("#pf-directores").checked = e.esSociedadConDirectores === true;
+  $("#pf-segurovida").checked = e.tieneSeguroVidaTitular === true;
+  m.classList.remove("hidden");
+}
+function guardarPerfil() {
+  if (!state.empresa) state.empresa = {};
+  const e = state.empresa;
+  e.regimenFiscal = $("#pf-regimen").value;
+  e.esMonotributo = $("#pf-mono").checked;
+  e.tieneVehiculos = $("#pf-vehiculos").checked;
+  e.incurreRepresentacion = $("#pf-representacion").checked;
+  e.cantidadEmpleados = parseInt($("#pf-empleados").value) || 0;
+  e.realizaDonaciones = $("#pf-donaciones").checked;
+  e.esSociedadConDirectores = $("#pf-directores").checked;
+  e.tieneSeguroVidaTitular = $("#pf-segurovida").checked;
+  saveState();
+  $("#perfil-modal").classList.add("hidden");
+  renderAnalisisFiscal();
 }
