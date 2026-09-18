@@ -5900,7 +5900,7 @@ function renderConfig() {
 
 // ── Navegación ───────────────────────────────────────────
 const INV_GROUP = ["inversiones", "excedente", "fci", "mercado", "cartera", "rendimiento", "divisas"];
-const FISCAL_GROUP = ["impuestos", "analisis", "contabilidad", "conciliacion"];
+const FISCAL_GROUP = ["impuestos", "analisis", "evolucion", "contabilidad", "conciliacion"];
 
 // Modo simple: oculta las secciones avanzadas (marcadas con data-adv).
 function aplicarModoEmpresa() {
@@ -5936,6 +5936,7 @@ function switchView(view) {
   if (view === "impuestos") renderImpuestos();
   if (view === "contabilidad") renderContabilidad();
   if (view === "analisis") renderAnalisisFiscal();
+  if (view === "evolucion") renderEvolucion();
   if (view === "conciliacion") renderConciliacion();
   if (view === "config") renderConfig();
 }

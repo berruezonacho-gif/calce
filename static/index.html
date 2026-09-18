@@ -41,6 +41,7 @@
         <div class="nav-menu">
           <button class="nav-sub" data-view="impuestos">Impuestos</button>
           <button class="nav-sub" data-view="analisis">Resultado económico</button>
+          <button class="nav-sub" data-view="evolucion">Evolución (real vs nominal)</button>
           <button class="nav-sub" data-view="contabilidad">Contabilidad</button>
           <button class="nav-sub" data-view="conciliacion" data-adv>Conciliación</button>
         </div>
@@ -187,6 +188,11 @@
     <!-- Vista Análisis fiscal (posición IVA + Ganancias + recomendaciones) -->
     <section class="view hidden" id="view-analisis">
       <div class="analisis-wrap" id="analisis-wrap"></div>
+    </section>
+
+    <!-- Vista Evolución (real vs nominal) -->
+    <section class="view hidden" id="view-evolucion">
+      <div class="evol-wrap" id="evol-wrap"></div>
     </section>
 
     <!-- Vista Contabilidad (Estado de Resultados + Sumas y Saldos) -->
@@ -595,6 +601,7 @@
   <script src="/static/demo_consultorio.js?v=3"></script>
   <script src="/static/reportes.js?v=3"></script>
   <script src="/static/analisis_fiscal.js?v=3"></script>
+  <script src="/static/evolucion.js?v=3"></script>
   <script src="/static/app.js?v=3"></script>
 </body>
 </html>
