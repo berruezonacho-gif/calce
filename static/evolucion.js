@@ -66,9 +66,6 @@ async function renderEvolucion() {
 
     <div class="conta-bar" style="flex-wrap:wrap;gap:12px">
       <div class="conta-periodo">
-        ${Object.entries(EVOL_METRICAS).map(([k,v])=>`<button class="cper ${evolMetrica===k?"active":""}" data-emet="${k}">${v.label}</button>`).join("")}
-      </div>
-      <div class="conta-periodo">
         <button class="cper ${evolModo==="anio"?"active":""}" data-emodo="anio">Año vs año</button>
         <button class="cper ${evolModo==="mes"?"active":""}" data-emodo="mes">Mensual</button>
       </div>
@@ -76,7 +73,6 @@ async function renderEvolucion() {
 
     <div id="evol-content"><div class="inv-placeholder">Ajustando por inflación…</div></div>`;
 
-  $$("[data-emet]").forEach(b => b.onclick = () => { evolMetrica = b.dataset.emet; renderEvolucion(); });
   $$("[data-emodo]").forEach(b => b.onclick = () => { evolModo = b.dataset.emodo; renderEvolucion(); });
 
   await _cargarInflacion();

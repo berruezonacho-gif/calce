@@ -230,6 +230,7 @@ function saveState() {
       };
       localStorage.setItem(STORE_KEY, JSON.stringify(snapshot));
       flashSaved();
+      if (window.Cloud) window.Cloud.onLocalChange();
     } catch (e) { console.warn("No se pudo guardar:", e); }
   }, 400);
 }
@@ -5640,6 +5641,7 @@ function renderConfig() {
     { v: "empresa", label: "Empresa", icono: "🏢" },
     { v: "impuestos", label: "Parámetros impositivos", icono: "📊" },
     { v: "preferencias", label: "Preferencias", icono: "⚙️" },
+    { v: "cuenta", label: "Cuenta y nube", icono: "☁️" },
     { v: "datos", label: "Datos y respaldo", icono: "💾" },
   ];
 
@@ -5727,6 +5729,39 @@ function renderConfig() {
           </select></label>
       </div>
       <button class="btn-primary sm cfg-save-btn" id="cfg-save-prefs">Guardar cambios</button>`;
+  } else if (sec === "cuenta") {
+    const cloudOn = window.Cloud && window.Cloud.configured();
+    const cUser = cloudOn ? window.Cloud.currentUser() : null;
+    if (!cloudOn) {
+      panel = `
+        <div class="cfg-sec-head"><h3>Cuenta y nube</h3></div>
+        <p class="cfg-hint">La sincronización con la nube todavía no está activada en esta instalación. Por ahora tus datos se guardan solo en este navegador.</p>`;
+    } else if (cUser) {
+      panel = `
+        <div class="cfg-sec-head"><h3>Cuenta y nube</h3></div>
+        <div class="cloud-card cloud-on">
+          <div class="cloud-row"><span class="cloud-dot ok"></span><div>
+            <b>Sesión iniciada</b><br><small class="muted">${h(cUser.email)}</small></div></div>
+          <p class="cfg-hint" style="margin:10px 0">Tus datos se guardan <b>automáticamente en la nube</b> con cada cambio. Podés entrar desde cualquier computadora con tu mail y contraseña, y vas a ver siempre lo último.</p>
+          <div id="cloud-status" class="cloud-status"></div>
+          <button class="btn-ghost sm" id="cloud-signout" style="margin-top:8px">Cerrar sesión</button>
+        </div>`;
+    } else {
+      panel = `
+        <div class="cfg-sec-head"><h3>Cuenta y nube</h3></div>
+        <p class="cfg-hint">Iniciá sesión para guardar tus datos en la nube automáticamente y poder entrar desde cualquier computadora. Si es la primera vez, creá tu cuenta.</p>
+        <div class="cloud-card">
+          <label class="field"><span>Email</span>
+            <input type="email" id="cloud-email" placeholder="tucorreo@ejemplo.com" autocomplete="username"></label>
+          <label class="field"><span>Contraseña</span>
+            <input type="password" id="cloud-pass" placeholder="Mínimo 6 caracteres" autocomplete="current-password"></label>
+          <div class="cloud-btns">
+            <button class="btn-primary sm" id="cloud-signin">Ingresar</button>
+            <button class="btn-ghost sm" id="cloud-signup">Crear cuenta</button>
+          </div>
+          <div id="cloud-msg" class="cloud-msg"></div>
+        </div>`;
+    }
   } else if (sec === "datos") {
     panel = `
       <div class="cfg-sec-head"><h3>Datos y respaldo</h3></div>
@@ -5817,6 +5852,37 @@ function renderConfig() {
       state.prefs.moneda = $("#cfg-moneda").value;
       state.prefs.formatoFecha = $("#cfg-fecha").value;
       saveState(); flashSaved();
+    };
+    return;
+  }
+  if (sec === "cuenta") {
+    const statusEl = $("#cloud-status");
+    if (statusEl && window.Cloud) {
+      window.Cloud.onStatus((kind, msg) => { if ($("#cloud-status")) $("#cloud-status").textContent = msg || ""; });
+    }
+    const outBtn = $("#cloud-signout");
+    if (outBtn) outBtn.onclick = async () => { await window.Cloud.signOut(); renderConfig(); };
+    const msg = (t, err) => { const m = $("#cloud-msg"); if (m) { m.textContent = t; m.className = "cloud-msg" + (err ? " err" : " ok"); } };
+    const inBtn = $("#cloud-signin");
+    const upBtn = $("#cloud-signup");
+    const creds = () => ({ email: ($("#cloud-email").value || "").trim(), password: $("#cloud-pass").value || "" });
+    if (inBtn) inBtn.onclick = async () => {
+      const { email, password } = creds();
+      if (!email || !password) return msg("Completá email y contraseña.", true);
+      inBtn.disabled = true; msg("Ingresando…", false);
+      try { await window.Cloud.signIn(email, password); renderConfig(); }
+      catch (e) { inBtn.disabled = false; msg("No pudimos ingresar: " + (e.message || "revisá los datos"), true); }
+    };
+    if (upBtn) upBtn.onclick = async () => {
+      const { email, password } = creds();
+      if (!email || !password) return msg("Completá email y contraseña.", true);
+      if (password.length < 6) return msg("La contraseña necesita al menos 6 caracteres.", true);
+      upBtn.disabled = true; msg("Creando cuenta…", false);
+      try {
+        const r = await window.Cloud.signUp(email, password);
+        if (r && r.session) { renderConfig(); }
+        else { upBtn.disabled = false; msg("Cuenta creada. Revisá tu email para confirmarla y después ingresá.", false); }
+      } catch (e) { upBtn.disabled = false; msg("No pudimos crear la cuenta: " + (e.message || "probá de nuevo"), true); }
     };
     return;
   }
@@ -6146,3 +6212,7 @@ function addDays(n) {
 }
 
 init();
+
+// Arranque de la nube (login + sincronización). Si Supabase no está
+// configurado o no hay sesión, no hace nada y la app sigue en modo local.
+if (window.Cloud) { try { window.Cloud.boot(); } catch (e) { console.warn("Cloud:", e); } }

@@ -10,6 +10,8 @@
   --card:      #FFFFFF;
   --teal:      #0E7C6B;
   --teal-bg:   #E6F4F1;
+  --green:     #0E9F6E;
+  --green-bg:  #E6F6EF;
   --amber:     #B26B00;
   --amber-bg:  #FBF0DE;
   --red:       #C0392B;
@@ -1544,3 +1546,16 @@ input:focus, select:focus {
 .evol-hero-real { border-left: 1px solid rgba(255,255,255,.15); padding-left: 24px; }
 .evol-hero-real span { font-size: 12.5px; color: rgba(255,255,255,.6); }
 .evol-warn { background: #FFF3E0; border: 1px solid #FFCC80; color: #E65100; font-size: 12.5px; padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; }
+
+/* ── Cuenta y nube ─────────────────────────────────────── */
+.cloud-card { max-width: 420px; margin-top: 8px; }
+.cloud-card .field { margin-bottom: 12px; }
+.cloud-btns { display: flex; gap: 10px; margin-top: 6px; }
+.cloud-msg { margin-top: 10px; font-size: 13px; min-height: 18px; }
+.cloud-msg.err { color: var(--red); }
+.cloud-msg.ok { color: var(--teal); }
+.cloud-status { font-size: 13px; color: var(--teal); min-height: 18px; }
+.cloud-card.cloud-on { border: 1px solid var(--line); border-radius: 10px; padding: 16px; background: var(--paper); }
+.cloud-row { display: flex; align-items: center; gap: 10px; }
+.cloud-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--slate-2); flex: 0 0 auto; }
+.cloud-dot.ok { background: var(--green); }
