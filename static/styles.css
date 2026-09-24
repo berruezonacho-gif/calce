@@ -1559,3 +1559,47 @@ input:focus, select:focus {
 .cloud-row { display: flex; align-items: center; gap: 10px; }
 .cloud-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--slate-2); flex: 0 0 auto; }
 .cloud-dot.ok { background: var(--green); }
+
+/* ── Pantalla de login (gate) ──────────────────────────── */
+.login-gate {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(160deg, #0B1F3A 0%, #14304F 100%);
+  padding: 20px;
+}
+.login-gate.hidden { display: none; }
+.lg-card {
+  width: 100%; max-width: 380px; background: #fff;
+  border-radius: 16px; padding: 32px 28px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.35);
+}
+.lg-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+.lg-name { font-size: 22px; font-weight: 700; color: var(--navy); letter-spacing: -.5px; }
+.lg-title { font-size: 20px; font-weight: 700; color: var(--ink); margin: 0 0 6px; }
+.lg-sub { font-size: 13px; color: var(--slate); margin: 0 0 20px; line-height: 1.5; }
+.lg-field { display: block; margin-bottom: 14px; }
+.lg-field span { display: block; font-size: 12px; font-weight: 600; color: var(--slate); margin-bottom: 5px; }
+.lg-field input {
+  width: 100%; padding: 11px 12px; border: 1px solid var(--line);
+  border-radius: 9px; font-size: 14px; font-family: "Inter", sans-serif; color: var(--ink);
+}
+.lg-field input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px var(--teal-bg); }
+.lg-btn-primary {
+  width: 100%; margin-top: 6px; padding: 12px; border: none; border-radius: 9px;
+  background: var(--navy); color: #fff; font-size: 15px; font-weight: 600;
+  font-family: "Inter", sans-serif; cursor: pointer;
+}
+.lg-btn-primary:hover { background: var(--navy-2); }
+.lg-btn-primary:disabled { opacity: .6; cursor: default; }
+.lg-msg { min-height: 18px; margin-top: 10px; font-size: 13px; text-align: center; }
+.lg-msg.err { color: var(--red); }
+.lg-msg.ok { color: var(--teal); }
+.lg-switch { margin-top: 16px; text-align: center; font-size: 13px; color: var(--slate); }
+.lg-link { background: none; border: none; color: var(--accent); font-weight: 600; cursor: pointer; font-size: 13px; font-family: "Inter", sans-serif; }
+
+/* ── Pantalla de empresa (crear/unirse) ────────────────── */
+.cg-tabs { display: flex; gap: 6px; margin-bottom: 18px; background: var(--line-2); padding: 4px; border-radius: 10px; }
+.cg-tab { flex: 1; padding: 9px; border: none; background: none; border-radius: 7px; font-size: 13px; font-weight: 600; color: var(--slate); cursor: pointer; font-family: "Inter", sans-serif; }
+.cg-tab.active { background: #fff; color: var(--navy); box-shadow: 0 1px 3px rgba(11,31,58,.1); }
+.cloud-code { font-family: var(--mono); font-size: 12px; background: var(--line-2); padding: 8px 10px; border-radius: 7px; word-break: break-all; margin: 6px 0 4px; border: 1px solid var(--line); }
+.cloud-code-row { display: flex; gap: 8px; align-items: center; }

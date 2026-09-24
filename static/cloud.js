@@ -1,13 +1,15 @@
-// ── Calce Cloud: login + sincronización con Supabase ─────────────────
-// Offline-first: el navegador (localStorage) sigue siendo la copia local y
-// la nube es el espejo. Con sesión iniciada, cada cambio se sube solo y al
-// entrar se baja lo último. Si Supabase no está configurado, no hace nada.
+// ── Calce Cloud: login + empresas + sincronización (Supabase) ────────
+// Modelo multiempresa: los datos viven por EMPRESA (company_states), y
+// varios usuarios (memberships) comparten la misma empresa. Offline-first:
+// el navegador (localStorage) es la copia local y la nube es el espejo.
 
 const Cloud = (() => {
   const META_KEY = "calce.sync.meta";
   const PRESYNC_KEY = "calce.state.presync";
+  const COMPANY_KEY = "calce.company.id";
   let sb = null;
   let user = null;
+  let companyId = null;
   let pushTimer = null;
   let statusCb = null;
   let lastStatus = { kind: "off", msg: "" };
@@ -23,9 +25,7 @@ const Cloud = (() => {
     try { return JSON.parse(localStorage.getItem(META_KEY)) || {}; }
     catch (e) { return {}; }
   }
-  function setMeta(m) {
-    try { localStorage.setItem(META_KEY, JSON.stringify(m)); } catch (e) {}
-  }
+  function setMeta(m) { try { localStorage.setItem(META_KEY, JSON.stringify(m)); } catch (e) {} }
 
   function ensureClient() {
     if (sb || !configured()) return sb;
@@ -40,6 +40,8 @@ const Cloud = (() => {
   function onStatus(cb) { statusCb = cb; if (cb) { try { cb(lastStatus.kind, lastStatus.msg); } catch (e) {} } }
   function status() { return lastStatus; }
   function currentUser() { return user; }
+  function currentCompany() { return companyId; }
+  function needsCompany() { return configured() && !!user && !companyId; }
 
   async function refreshUser() {
     if (!ensureClient()) return null;
@@ -50,76 +52,110 @@ const Cloud = (() => {
     return user;
   }
 
-  // Exactamente lo que se persiste en localStorage (mismo formato que loadState lee)
   function stateSnapshot() {
     try { return JSON.parse(localStorage.getItem(STORE_KEY) || "null"); }
     catch (e) { return null; }
   }
 
+  // ── Empresas ──────────────────────────────────────────
+  async function resolveCompany() {
+    companyId = null;
+    if (!ensureClient() || !user) return null;
+    try {
+      const { data, error } = await sb.from("memberships")
+        .select("company_id").eq("user_id", user.id).limit(1);
+      if (!error && data && data.length) {
+        companyId = data[0].company_id;
+        try { localStorage.setItem(COMPANY_KEY, companyId); } catch (e) {}
+        return companyId;
+      }
+    } catch (e) {}
+    try { localStorage.removeItem(COMPANY_KEY); } catch (e) {}
+    return null;
+  }
+
+  async function createCompany(nombre) {
+    if (!ensureClient() || !user) throw new Error("No hay sesión.");
+    const { data: comp, error: e1 } = await sb.from("companies")
+      .insert({ nombre: nombre }).select("id").single();
+    if (e1) throw e1;
+    const cid = comp.id;
+    const { error: e2 } = await sb.from("memberships")
+      .insert({ company_id: cid, user_id: user.id, role: "owner" });
+    if (e2) throw e2;
+    companyId = cid;
+    try { localStorage.setItem(COMPANY_KEY, cid); } catch (e) {}
+    // Sembrar el estado de la empresa con lo que haya cargado local.
+    await push();
+    return cid;
+  }
+
+  async function joinCompany(code) {
+    if (!ensureClient() || !user) throw new Error("No hay sesión.");
+    const cid = (code || "").trim();
+    if (!cid) throw new Error("Ingresá un código.");
+    const { error } = await sb.from("memberships")
+      .insert({ company_id: cid, user_id: user.id, role: "member" });
+    if (error) throw new Error("Código inválido o ya sos miembro de esa empresa.");
+    companyId = cid;
+    try { localStorage.setItem(COMPANY_KEY, cid); } catch (e) {}
+    // Traer el estado de la empresa (con backup de lo local).
+    const row = await pullRow();
+    if (row) { applyCloud(row); } else { await push(); }
+    return cid;
+  }
+
+  // ── Estado (por empresa) ──────────────────────────────
   async function push() {
-    if (!ensureClient() || !user) return;
+    if (!ensureClient() || !user || !companyId) return;
     const snap = stateSnapshot();
     if (!snap) return;
     const nowISO = new Date().toISOString();
     setStatus("saving", "Guardando en la nube…");
-    const { error } = await sb.from("user_states")
-      .upsert({ user_id: user.id, data: snap, updated_at: nowISO });
+    const { error } = await sb.from("company_states")
+      .upsert({ company_id: companyId, data: snap, updated_at: nowISO });
     if (error) { setStatus("error", "Sin conexión — guardado local"); return; }
     const m = meta();
-    m.lastPushAt = Date.now();
-    m.lastPulledUpdatedAt = nowISO;
-    m.localDirtyAt = 0;
+    m.lastPushAt = Date.now(); m.lastPulledUpdatedAt = nowISO; m.localDirtyAt = 0;
     setMeta(m);
     setStatus("ok", "Guardado en la nube ✓");
   }
 
-  // Llamado desde saveState() de la app tras escribir en localStorage.
   function onLocalChange() {
-    if (!ensureClient() || !user) return;
+    if (!ensureClient() || !user || !companyId) return;
     const m = meta(); m.localDirtyAt = Date.now(); setMeta(m);
     clearTimeout(pushTimer);
     pushTimer = setTimeout(push, 1200);
   }
 
   async function pullRow() {
-    if (!ensureClient() || !user) return null;
+    if (!ensureClient() || !user || !companyId) return null;
     try {
-      const { data, error } = await sb.from("user_states")
-        .select("data, updated_at").eq("user_id", user.id).maybeSingle();
+      const { data, error } = await sb.from("company_states")
+        .select("data, updated_at").eq("company_id", companyId).maybeSingle();
       if (error) return null;
-      return data; // { data, updated_at } o null
+      return data;
     } catch (e) { return null; }
   }
 
-  // Reemplaza lo local por lo de la nube (guardando un backup) y recarga.
   function applyCloud(row) {
     try { localStorage.setItem(PRESYNC_KEY, localStorage.getItem(STORE_KEY) || ""); } catch (e) {}
     try { localStorage.setItem(STORE_KEY, JSON.stringify(row.data)); } catch (e) {}
     const m = meta();
-    m.lastPulledUpdatedAt = row.updated_at;
-    m.lastPushAt = Date.now();
-    m.localDirtyAt = 0;
+    m.lastPulledUpdatedAt = row.updated_at; m.lastPushAt = Date.now(); m.localDirtyAt = 0;
     setMeta(m);
     location.reload();
   }
 
-  // Sincronización de arranque (ya había sesión): protege cambios locales sin subir.
   async function sync() {
-    if (!ensureClient() || !user) return;
+    if (!ensureClient() || !user || !companyId) return;
     const row = await pullRow();
     const m = meta();
-    if (!row) { await push(); return; }                        // nube vacía → sembrar
+    if (!row) { await push(); return; }
     const localDirty = (m.localDirtyAt || 0) > (m.lastPushAt || 0);
-    if (localDirty) { await push(); return; }                  // cambios locales sin subir → protegerlos
-    if (row.updated_at !== m.lastPulledUpdatedAt) { applyCloud(row); return; } // otro dispositivo → bajar
-    setStatus("ok", "Guardado en la nube ✓");                  // ya en sync
-  }
-
-  // Sincronización al iniciar sesión manualmente.
-  async function loginSync() {
-    const row = await pullRow();
-    if (!row) { await push(); setStatus("ok", "Sincronizado — subimos los datos de este dispositivo"); return; }
-    applyCloud(row); // nube con datos → bajar (con backup local) y recargar
+    if (localDirty) { await push(); return; }
+    if (row.updated_at !== m.lastPulledUpdatedAt) { applyCloud(row); return; }
+    setStatus("ok", "Guardado en la nube ✓");
   }
 
   async function boot() {
@@ -127,6 +163,8 @@ const Cloud = (() => {
     ensureClient();
     await refreshUser();
     if (!user) { setStatus("anon", ""); return; }
+    await resolveCompany();
+    if (!companyId) { setStatus("nocompany", ""); return; }
     setStatus("ok", "Conectado como " + user.email);
     await sync();
   }
@@ -136,7 +174,11 @@ const Cloud = (() => {
     const { data, error } = await sb.auth.signInWithPassword({ email, password });
     if (error) throw error;
     user = data.user;
-    await loginSync();
+    await resolveCompany();
+    if (companyId) {
+      const row = await pullRow();
+      if (row) { applyCloud(row); } else { await push(); }
+    }
     return user;
   }
 
@@ -144,19 +186,22 @@ const Cloud = (() => {
     if (!ensureClient()) throw new Error("La nube no está configurada.");
     const { data, error } = await sb.auth.signUp({ email, password });
     if (error) throw error;
-    if (data.session) { user = data.user; await loginSync(); }
-    return data; // si no hay session, hace falta confirmar el mail
+    if (data.session) { user = data.user; await resolveCompany(); }
+    return data; // sin session ⇒ falta confirmar el mail
   }
 
   async function signOut() {
     if (!ensureClient()) return;
     try { await sb.auth.signOut(); } catch (e) {}
-    user = null;
+    user = null; companyId = null;
+    try { localStorage.removeItem(COMPANY_KEY); } catch (e) {}
     setStatus("anon", "");
   }
 
   return {
-    configured, boot, onLocalChange, onStatus, status, currentUser,
+    configured, boot, onLocalChange, onStatus, status,
+    currentUser, currentCompany, needsCompany,
+    resolveCompany, createCompany, joinCompany,
     signIn, signUp, signOut, push,
   };
 })();

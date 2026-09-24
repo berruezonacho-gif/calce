@@ -5737,12 +5737,19 @@ function renderConfig() {
         <div class="cfg-sec-head"><h3>Cuenta y nube</h3></div>
         <p class="cfg-hint">La sincronización con la nube todavía no está activada en esta instalación. Por ahora tus datos se guardan solo en este navegador.</p>`;
     } else if (cUser) {
+      const cCode = window.Cloud.currentCompany();
       panel = `
         <div class="cfg-sec-head"><h3>Cuenta y nube</h3></div>
         <div class="cloud-card cloud-on">
           <div class="cloud-row"><span class="cloud-dot ok"></span><div>
             <b>Sesión iniciada</b><br><small class="muted">${h(cUser.email)}</small></div></div>
-          <p class="cfg-hint" style="margin:10px 0">Tus datos se guardan <b>automáticamente en la nube</b> con cada cambio. Podés entrar desde cualquier computadora con tu mail y contraseña, y vas a ver siempre lo último.</p>
+          <p class="cfg-hint" style="margin:10px 0">Tus datos se guardan <b>automáticamente en la nube</b> con cada cambio. Vos y tu equipo comparten los mismos datos de la empresa desde cualquier computadora.</p>
+          ${cCode ? `<div style="margin:12px 0">
+            <small class="muted"><b>Código para invitar a tu equipo</b></small>
+            <p class="cfg-hint" style="margin:2px 0 6px">Compartí este código con quien quieras que vea los datos de tu empresa. Lo pega en "Unirme con código" al crear su cuenta.</p>
+            <div class="cloud-code-row"><span class="cloud-code" id="cloud-code">${h(cCode)}</span>
+              <button class="btn-ghost sm" id="cloud-copy">Copiar</button></div>
+          </div>` : ""}
           <div id="cloud-status" class="cloud-status"></div>
           <button class="btn-ghost sm" id="cloud-signout" style="margin-top:8px">Cerrar sesión</button>
         </div>`;
@@ -5861,7 +5868,12 @@ function renderConfig() {
       window.Cloud.onStatus((kind, msg) => { if ($("#cloud-status")) $("#cloud-status").textContent = msg || ""; });
     }
     const outBtn = $("#cloud-signout");
-    if (outBtn) outBtn.onclick = async () => { await window.Cloud.signOut(); renderConfig(); };
+    if (outBtn) outBtn.onclick = async () => { await window.Cloud.signOut(); showLoginGate(); };
+    const copyBtn = $("#cloud-copy");
+    if (copyBtn) copyBtn.onclick = () => {
+      const code = window.Cloud.currentCompany() || "";
+      navigator.clipboard?.writeText(code).then(() => { copyBtn.textContent = "¡Copiado!"; setTimeout(() => { copyBtn.textContent = "Copiar"; }, 1500); });
+    };
     const msg = (t, err) => { const m = $("#cloud-msg"); if (m) { m.textContent = t; m.className = "cloud-msg" + (err ? " err" : " ok"); } };
     const inBtn = $("#cloud-signin");
     const upBtn = $("#cloud-signup");
@@ -6213,6 +6225,115 @@ function addDays(n) {
 
 init();
 
-// Arranque de la nube (login + sincronización). Si Supabase no está
-// configurado o no hay sesión, no hace nada y la app sigue en modo local.
-if (window.Cloud) { try { window.Cloud.boot(); } catch (e) { console.warn("Cloud:", e); } }
+// ── Pantalla de login obligatoria ──────────────────────────
+let _gateMode = "signin";
+function showLoginGate() {
+  const g = $("#login-gate"); if (!g) return;
+  g.classList.remove("hidden");
+  setTimeout(() => { const e = $("#gate-email"); if (e) e.focus(); }, 50);
+}
+function hideLoginGate() { const g = $("#login-gate"); if (g) g.classList.add("hidden"); }
+function _gateMsg(t, err) { const m = $("#gate-msg"); if (m) { m.textContent = t; m.className = "lg-msg" + (err ? " err" : (t ? " ok" : "")); } }
+function _setGateMode(mode) {
+  _gateMode = mode;
+  const up = mode === "signup";
+  if ($("#lg-title")) $("#lg-title").textContent = up ? "Creá tu cuenta" : "Ingresá a tu cuenta";
+  if ($("#lg-sub")) $("#lg-sub").textContent = up
+    ? "Creá una cuenta para empezar a usar Calce. Tus datos se guardan en la nube."
+    : "Tus datos están guardados en la nube. Iniciá sesión para verlos.";
+  if ($("#gate-signin")) $("#gate-signin").textContent = up ? "Crear cuenta" : "Ingresar";
+  if ($("#lg-switch-txt")) $("#lg-switch-txt").textContent = up ? "¿Ya tenés cuenta?" : "¿Todavía no tenés cuenta?";
+  if ($("#gate-toggle")) $("#gate-toggle").textContent = up ? "Ingresar" : "Crear cuenta";
+  if ($("#gate-pass")) $("#gate-pass").setAttribute("autocomplete", up ? "new-password" : "current-password");
+  _gateMsg("", false);
+}
+function wireLoginGate() {
+  const btn = $("#gate-signin"), tog = $("#gate-toggle"), pass = $("#gate-pass");
+  if (!btn || !tog) return;
+  tog.onclick = () => _setGateMode(_gateMode === "signin" ? "signup" : "signin");
+  const submit = async () => {
+    if (!window.Cloud) return;
+    const email = ($("#gate-email").value || "").trim();
+    const pw = pass.value || "";
+    if (!email || !pw) return _gateMsg("Completá email y contraseña.", true);
+    if (_gateMode === "signup" && pw.length < 6) return _gateMsg("La contraseña necesita al menos 6 caracteres.", true);
+    btn.disabled = true; _gateMsg(_gateMode === "signup" ? "Creando cuenta…" : "Ingresando…", false);
+    try {
+      if (_gateMode === "signup") {
+        const r = await window.Cloud.signUp(email, pw);
+        if (r && r.session) { routeGates(); }
+        else { btn.disabled = false; _setGateMode("signin"); _gateMsg("Cuenta creada. Revisá tu email para confirmarla y después ingresá.", false); }
+      } else {
+        await window.Cloud.signIn(email, pw);
+        routeGates();
+      }
+    } catch (e) {
+      btn.disabled = false;
+      _gateMsg((_gateMode === "signup" ? "No pudimos crear la cuenta: " : "No pudimos ingresar: ") + (e.message || "revisá los datos"), true);
+    }
+  };
+  btn.onclick = submit;
+  if (pass) pass.addEventListener("keydown", (ev) => { if (ev.key === "Enter") submit(); });
+}
+
+// ── Pantalla de empresa (crear / unirse) ───────────────────
+function showCompanyGate() { const g = $("#company-gate"); if (g) g.classList.remove("hidden"); }
+function hideCompanyGate() { const g = $("#company-gate"); if (g) g.classList.add("hidden"); }
+function _cgMsg(t, err) { const m = $("#cg-msg"); if (m) { m.textContent = t; m.className = "lg-msg" + (err ? " err" : (t ? " ok" : "")); } }
+function wireCompanyGate() {
+  const tCrear = $("#cg-tab-crear"), tUnir = $("#cg-tab-unir");
+  const pCrear = $("#cg-panel-crear"), pUnir = $("#cg-panel-unir");
+  if (!tCrear || !tUnir) return;
+  const setTab = (crear) => {
+    tCrear.classList.toggle("active", crear); tUnir.classList.toggle("active", !crear);
+    pCrear.classList.toggle("hidden", !crear); pUnir.classList.toggle("hidden", crear);
+    _cgMsg("", false);
+  };
+  tCrear.onclick = () => setTab(true);
+  tUnir.onclick = () => setTab(false);
+
+  const crearBtn = $("#cg-crear");
+  if (crearBtn) crearBtn.onclick = async () => {
+    const nombre = ($("#cg-nombre").value || "").trim();
+    if (!nombre) return _cgMsg("Poné el nombre de la empresa.", true);
+    crearBtn.disabled = true; _cgMsg("Creando empresa…", false);
+    try {
+      await window.Cloud.createCompany(nombre);
+      // Guardar el nombre también en los datos de la app (Configuración → Empresa)
+      if (state && state.empresa && !state.empresa.nombre) { state.empresa.nombre = nombre; saveState(); }
+      routeGates();
+    } catch (e) { crearBtn.disabled = false; _cgMsg("No pudimos crear la empresa: " + (e.message || "probá de nuevo"), true); }
+  };
+
+  const unirBtn = $("#cg-unir");
+  if (unirBtn) unirBtn.onclick = async () => {
+    const code = ($("#cg-codigo").value || "").trim();
+    if (!code) return _cgMsg("Pegá el código de la empresa.", true);
+    unirBtn.disabled = true; _cgMsg("Uniéndote…", false);
+    try { await window.Cloud.joinCompany(code); routeGates(); }
+    catch (e) { unirBtn.disabled = false; _cgMsg(e.message || "No pudimos unirte a esa empresa.", true); }
+  };
+
+  const outBtn = $("#cg-logout");
+  if (outBtn) outBtn.onclick = async () => { await window.Cloud.signOut(); hideCompanyGate(); showLoginGate(); };
+}
+
+// Decide qué pantalla mostrar según el estado de la sesión.
+function routeGates() {
+  if (!window.Cloud || !window.Cloud.configured()) { hideLoginGate(); hideCompanyGate(); return; }
+  if (!window.Cloud.currentUser()) { hideCompanyGate(); showLoginGate(); return; }
+  if (!window.Cloud.currentCompany()) { hideLoginGate(); showCompanyGate(); return; }
+  hideLoginGate(); hideCompanyGate();
+}
+
+// Arranque de la nube: login + empresa obligatorios si Supabase está configurado.
+// (Sin configurar → modo local, sin gate. Con ?demo=… → se permite ver sin login.)
+wireLoginGate();
+wireCompanyGate();
+if (window.Cloud && window.Cloud.configured()) {
+  const _demo = new URLSearchParams(location.search).get("demo");
+  if (!_demo) showLoginGate();
+  window.Cloud.boot().then(() => {
+    if (!_demo) routeGates();
+  }).catch((e) => { console.warn("Cloud:", e); });
+}
