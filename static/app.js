@@ -5774,9 +5774,11 @@ function renderConfig() {
       <div class="cfg-sec-head"><h3>Datos y respaldo</h3></div>
       <p class="cfg-hint">Todos tus datos se guardan en este navegador. Podés reiniciar la app para empezar de cero.</p>
       <div class="cfg-datos-actions">
+        <button class="btn-ghost" id="cfg-load-demo">Cargar datos de ejemplo (consultorio)</button>
         <button class="btn-ghost cfg-danger" id="cfg-reset">Borrar todos mis datos</button>
       </div>
-      <p class="cfg-hint" style="margin-top:12px">La app guarda automáticamente cada cambio. Si algo se ve raro, probá recargar con Cmd/Ctrl+Shift+R.</p>`;
+      <p class="cfg-hint" style="margin-top:12px">"Cargar datos de ejemplo" reemplaza los datos actuales por el consultorio de ejemplo (535 comprobantes). Si estás dentro de una empresa, quedan guardados en la nube de esa empresa.</p>
+      <p class="cfg-hint" style="margin-top:8px">La app guarda automáticamente cada cambio. Si algo se ve raro, probá recargar con Cmd/Ctrl+Shift+R.</p>`;
   }
 
   wrap.innerHTML = `
@@ -5803,6 +5805,13 @@ function renderConfig() {
     $("#cfg-reset").onclick = () => {
       if (!confirm("¿Borrar TODOS tus datos? Esta acción no se puede deshacer.")) return;
       localStorage.removeItem(STORE_KEY); location.reload();
+    };
+    const demoBtn = $("#cfg-load-demo");
+    if (demoBtn) demoBtn.onclick = () => {
+      if (typeof DEMO_CONSULTORIO === "undefined") { alert("Los datos de ejemplo no están disponibles."); return; }
+      if (!confirm("Esto reemplaza los datos actuales por el consultorio de ejemplo (535 comprobantes). Si estás dentro de una empresa, quedan guardados en la nube de esa empresa. ¿Continuar?")) return;
+      loadDemoDataset(DEMO_CONSULTORIO);
+      saveState(); project(); switchView("dashboard");
     };
     return;
   }
