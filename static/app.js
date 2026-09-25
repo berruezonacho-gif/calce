@@ -2011,7 +2011,7 @@ async function renderExcedente() {
 
   renderOptimizar();
   renderAsesoriaExcedente();
-  renderFondosExcedente();
+  renderOpcionesExcedente();
   const link = $("#exc-ver-cartera");
   if (link) link.addEventListener("click", (e) => { e.preventDefault(); switchView("cartera"); });
 }
@@ -2122,6 +2122,103 @@ function colocarEnFondoElegido(name, manager, tna) {
   $("#i-label").value = name || "FCI money market";
   $("#i-sociedad").value = manager || "";
   $("#i-rend").value = tna || 40;
+  updateInvPreview();
+}
+
+// Asesoría comparada: FCI, caución, plazo fijo y dólar (más de una opción).
+async function renderOpcionesExcedente() {
+  const host = $("#exc-fondos");
+  if (!host) return;
+  host.innerHTML = `<div class="inv-placeholder">Cargando opciones y tasas…</div>`;
+
+  // Colocable ARS hoy (cuentas bancarias, no efectivo ni comitente)
+  const cuentas = state.accounts.filter(a => a.moneda === "ARS" && a.tipo !== "efectivo" && a.tipo !== "comitente");
+  const base = cuentas.reduce((s,a) => s + Math.max(0, saldoCuentaAFecha(a) - pagosDeHoy(a.id)), 0);
+
+  // Próximo pago grande (para recomendar liquidez vs plazo)
+  let pagos = [];
+  cuentas.forEach(a => { pagos = pagos.concat(pagosProximos(a.id, 60)); });
+  pagos.sort((x,y) => new Date(x.date) - new Date(y.date));
+  const diasProxPago = pagos.length ? Math.max(0, Math.round((new Date(pagos[0].date+"T00:00:00") - new Date())/86400000)) : null;
+
+  // Tasas en vivo, con fallback silencioso
+  const safeJson = async (u) => { try { return await (await fetch(u)).json(); } catch (e) { return null; } };
+  const [mm, cau, pf] = await Promise.all([
+    state.fciData ? Promise.resolve(state.fciData) : safeJson("/api/fci/money-market"),
+    safeJson("/api/tasas/caucion"),
+    safeJson("/api/tasas/plazo-fijo"),
+  ]);
+  if (mm) state.fciData = mm;
+  const mmTna = (mm && mm.funds && mm.funds.length) ? Math.max(...mm.funds.map(f => f.tna || 0)) : null;
+  const cauTna = cau ? (cau.tna_1d || (cau.plazos && cau.plazos[0] && cau.plazos[0].tna)) : null;
+  const pfTna = pf ? pf.best_tna : null;
+
+  const gan = (monto, tna, dias) => (tna && monto) ? monto * (tna/100) * (dias/365) : 0;
+
+  const opciones = [
+    { tipo:"fci", nombre:"FCI Money Market", tna: mmTna, dias: 30, badge:"Máxima liquidez",
+      liquidez:"Hoy mismo / 24 hs", riesgo:"Muy bajo",
+      para:"Plata que podés necesitar en cualquier momento. Rinde todos los días y la rescatás cuando quieras." },
+    { tipo:"caucion", nombre:"Caución bursátil", tna: cauTna, dias: 7, badge:"Corto plazo",
+      liquidez:"Al vencimiento (1 a 30 días)", riesgo:"Muy bajo (garantía BYMA)",
+      para:"Excedente que no vas a tocar por unos días. Elegís el plazo. Necesita cuenta comitente." },
+    { tipo:"plazo_fijo", nombre:"Plazo fijo 30 días", tna: pfTna, dias: 30, badge:"Mayor tasa",
+      liquidez:"Al vencimiento (30 días)", riesgo:"Muy bajo (garantía bancaria)",
+      para:"La parte del excedente que seguro no tocás en un mes. Queda inmovilizada pero suele rendir más." },
+    { tipo:"dolares", nombre:"Dólar (MEP)", tna: null, dias: 30, badge:"Cobertura",
+      liquidez:"Inmediata", riesgo:"Precio del dólar",
+      para:"No paga tasa, pero te cubre de una devaluación. Ideal si tenés pagos futuros en dólares (importaciones, obra)." },
+  ];
+
+  let reco = "";
+  if (base > 0) {
+    reco = (diasProxPago !== null && diasProxPago <= 20)
+      ? `Tenés un pago grande en <b>${diasProxPago} día${diasProxPago===1?"":"s"}</b>. Dejá esa parte en <b>money market</b> (la rescatás justo antes) y el resto, lo que no vas a tocar, en <b>plazo fijo o caución</b> que rinden más.`
+      : `No tenés pagos grandes inmediatos: podés colocar el grueso en <b>plazo fijo o caución</b> (mejor tasa) y dejar una parte en <b>money market</b> por las dudas.`;
+  }
+
+  const src = [];
+  if (mm && mm.source) src.push("FCI " + (mm.source === "CAFCI" ? "CAFCI" : "referencia"));
+  if (cau && cau.source) src.push("Caución " + cau.source);
+  if (pf && pf.source) src.push("PF " + pf.source);
+
+  host.innerHTML = `
+    <div class="opc-card">
+      <div class="opc-head">
+        <div><h3>Dónde colocar tu excedente</h3>
+        <p>Comparación de opciones${base>0?` sobre <b>${money(base)}</b> colocables hoy`:""}. No es solo FCI: elegí según cuánto tiempo podés dejar la plata quieta.</p></div>
+      </div>
+      ${reco ? `<div class="opc-reco"><span class="opc-reco-ico">◆</span><div>${reco}</div></div>` : ""}
+      <div class="opc-grid">
+        ${opciones.map(o => `
+          <div class="opc-item">
+            <div class="opc-item-top"><b>${o.nombre}</b><span class="opc-badge">${o.badge}</span></div>
+            <div class="opc-tna">${o.tna!=null ? `${num2g(o.tna)}%<small>TNA</small>` : `<span class="opc-notna">Cobertura</span>`}</div>
+            ${o.tna!=null && base>0 ? `<div class="opc-gan">Ganás ~${money(gan(base,o.tna,o.dias))} en ${o.dias} días</div>` : (o.tipo==="dolares"?`<div class="opc-gan opc-cober">No rinde tasa, cubre el valor</div>`:`<div class="opc-gan">&nbsp;</div>`)}
+            <div class="opc-meta"><span>${o.liquidez}</span><span>${o.riesgo}</span></div>
+            <p class="opc-para">${o.para}</p>
+            <button class="opc-colocar" data-tipo="${o.tipo}" data-tna="${o.tna!=null?o.tna:""}" data-nombre="${h(o.nombre)}">Colocar acá</button>
+          </div>`).join("")}
+      </div>
+      ${src.length?`<p class="opc-src">Tasas de referencia: ${src.join(" · ")}. Validá la tasa final con tu banco o ALyC.</p>`:""}
+    </div>`;
+
+  $$(".opc-colocar").forEach(b => b.onclick = () => abrirColocacion(b.dataset.tipo, b.dataset.tna ? parseFloat(b.dataset.tna) : null, b.dataset.nombre));
+}
+
+// Abre el modal de inversión preseleccionando el tipo elegido.
+function abrirColocacion(tipo, tna, nombre) {
+  openInvModal();
+  if ($("#i-tipo")) { $("#i-tipo").value = tipo; updateInvTipo(); }
+  if (tipo !== "dolares") {
+    const esBursatil = (tipo === "caucion" || tipo === "bono");
+    const cuentas = state.accounts.filter(a => esBursatil ? a.tipo === "comitente" : (a.moneda === "ARS" && a.tipo !== "efectivo" && a.tipo !== "comitente"));
+    let mejor = null, maxCol = -1;
+    cuentas.forEach(a => { const c = Math.max(0, saldoCuentaAFecha(a) - pagosDeHoy(a.id)); if (c > maxCol) { maxCol = c; mejor = a; } });
+    if (mejor && $("#i-account")) { $("#i-account").value = mejor.id; updateInvTipo(); if (maxCol > 0 && $("#i-monto")) $("#i-monto").value = Math.round(maxCol); }
+  }
+  if (nombre && $("#i-label")) $("#i-label").value = nombre;
+  if (tna != null && $("#i-rend")) $("#i-rend").value = tna;
   updateInvPreview();
 }
 
