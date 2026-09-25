@@ -209,6 +209,8 @@ function calcularDSO(tipo, dias = 90) {
 const STORE_KEY = "calce.state.v1";
 let _saveTimer = null;
 function saveState() {
+  // En modo demo no persistimos nada (efímero, aislado de los datos reales y la nube).
+  if (window.__DEMO) return;
   // Debounce para no escribir en cada tecla
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
@@ -4983,6 +4985,43 @@ function proximosVencimientosImpositivos() {
   return vtos.sort((a,b) => new Date(a.fecha) - new Date(b.fecha));
 }
 
+// Posición de IVA del último mes con datos: débito (ventas) − crédito (compras).
+function renderPosicionIVA() {
+  const host = $("#imp-posicion-iva");
+  if (!host) return;
+  const comps = state.comprobantes || [];
+  const meses = {};
+  comps.forEach(c => {
+    if (!c.emision) return;
+    const m = c.emision.slice(0,7);
+    if (!/^\d{4}-\d{2}$/.test(m)) return;
+    if (!meses[m]) meses[m] = { debito:0, credito:0 };
+    const iva = c.iva || 0;
+    if (c.tipo === "cobrar") meses[m].debito += iva;
+    else if (c.tipo === "pagar") {
+      const computable = (c.ivaComputable === undefined) ? true : (c.ivaComputable === true);
+      if (computable) meses[m].credito += iva;
+    }
+  });
+  const keys = Object.keys(meses).sort();
+  if (!keys.length) { host.innerHTML = ""; return; }
+  const ultimo = keys[keys.length - 1];
+  const m = meses[ultimo];
+  const saldo = m.debito - m.credito;
+  const aFavor = Math.max(0, -saldo);
+  const aPagar = Math.max(0, saldo);
+  const mesLabel = new Date(ultimo + "-01T00:00:00").toLocaleDateString("es-AR", { month:"long", year:"numeric" });
+  host.innerHTML = `
+    <div class="card" style="margin-bottom:16px">
+      <div class="chart-head"><h2>Posición de IVA — ${mesLabel}</h2></div>
+      <div class="imp-kpis">
+        <div class="imp-kpi"><small>IVA débito (ventas)</small><b>${money(m.debito)}</b></div>
+        <div class="imp-kpi"><small>IVA crédito (compras)</small><b>${money(m.credito)}</b></div>
+        <div class="imp-kpi hero"><small>${aFavor > 0 ? "Saldo a favor" : "A pagar"}</small><b>${money(aFavor > 0 ? aFavor : aPagar)}</b><span>${aFavor > 0 ? "queda a favor para el mes que viene" : "vence el mes siguiente"}</span></div>
+      </div>
+    </div>`;
+}
+
 function renderCalendarioImpuestos() {
   const host = $("#imp-calendario");
   if (!host) return;
@@ -5499,9 +5538,9 @@ function renderImpuestos() {
       <div class="imp-result" id="imp-result"><div class="inv-placeholder">Cargá tus operaciones y calculá.</div></div>
     </div>`;
 
-  renderPosicionIVA();
-  renderCalendarioImpuestos();
-  renderRetenciones();
+  try { renderPosicionIVA(); } catch (e) { console.warn("posicionIVA:", e); }
+  try { renderCalendarioImpuestos(); } catch (e) { console.warn("calendario:", e); }
+  try { renderRetenciones(); } catch (e) { console.warn("retenciones:", e); }
 
   const renderOps = () => {
     $("#imp-ops").innerHTML = state.impOps.map((op, i) => `
@@ -6128,18 +6167,22 @@ function switchView(view) {
 // ── Init ─────────────────────────────────────────────────
 function init() {
   const demoParam = new URLSearchParams(location.search).get("demo");
+  // Modo demo: efímero. No guarda en el navegador ni sincroniza con la nube,
+  // así nunca ensucia los datos reales ni se pisan entre demos.
   if (demoParam === "consultorio" && typeof DEMO_CONSULTORIO !== "undefined") {
+    window.__DEMO = true;
     loadDemoDataset(DEMO_CONSULTORIO);
   } else if (demoParam === "constructora" && typeof DEMO_CONSTRUCTORA !== "undefined") {
+    window.__DEMO = true;
     loadDemoDataset(DEMO_CONSTRUCTORA);
   } else if (demoParam === "limpio") {
     // Demo LIMPIO para cliente nuevo: cuentas típicas ya creadas, sin datos.
+    window.__DEMO = true;
     state.accounts = [
       { id: "cc", name: "Cuenta corriente", banco: "Banco de la Nación Argentina", tipo: "cc", moneda: "ARS", alias: "", opening: 0 },
       { id: "caja", name: "Efectivo", banco: "", tipo: "efectivo", moneda: "ARS", alias: "", opening: 0 },
     ];
     state.movements = [];
-    saveState();
   } else if (loadState()) {
     // Estado restaurado desde el navegador: aplicar prefs al panel
     if ($("#buffer")) $("#buffer").value = state.prefs.colchon;
@@ -6435,13 +6478,10 @@ function routeGates() {
 }
 
 // Arranque de la nube: login + empresa obligatorios si Supabase está configurado.
-// (Sin configurar → modo local, sin gate. Con ?demo=… → se permite ver sin login.)
+// (Sin configurar → modo local, sin gate. Con ?demo=… → demo aislado, sin nube ni gate.)
 wireLoginGate();
 wireCompanyGate();
-if (window.Cloud && window.Cloud.configured()) {
-  const _demo = new URLSearchParams(location.search).get("demo");
-  if (!_demo) showLoginGate();
-  window.Cloud.boot().then(() => {
-    if (!_demo) routeGates();
-  }).catch((e) => { console.warn("Cloud:", e); });
+if (window.Cloud && window.Cloud.configured() && !window.__DEMO) {
+  showLoginGate();
+  window.Cloud.boot().then(() => { routeGates(); }).catch((e) => { console.warn("Cloud:", e); });
 }
