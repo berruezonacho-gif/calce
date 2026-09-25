@@ -6033,6 +6033,8 @@ function init() {
   const demoParam = new URLSearchParams(location.search).get("demo");
   if (demoParam === "consultorio" && typeof DEMO_CONSULTORIO !== "undefined") {
     loadDemoDataset(DEMO_CONSULTORIO);
+  } else if (demoParam === "constructora" && typeof DEMO_CONSTRUCTORA !== "undefined") {
+    loadDemoDataset(DEMO_CONSTRUCTORA);
   } else if (demoParam === "limpio") {
     // Demo LIMPIO para cliente nuevo: cuentas típicas ya creadas, sin datos.
     state.accounts = [
