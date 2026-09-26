@@ -186,33 +186,57 @@ function renderEvolMensual(host, porMes, hoyMes) {
 function dibujarEvolChart(filas, hayInflacion) {
   const host = $("#evol-chart");
   if (!host || !filas.length) return;
-  const W=760, H=220, P={t:16,r:16,b:34,l:70};
+  const W=760, H=250, P={t:20,r:18,b:40,l:70};
   const iw=W-P.l-P.r, ih=H-P.t-P.b;
   const maxVal = Math.max(...filas.map(f=>Math.max(f.nominal, hayInflacion?f.real:0)), 1);
   const n = filas.length;
-  const groupW = iw / n;
-  const barW = hayInflacion ? groupW*0.28 : groupW*0.4;
+  const X = (i) => n===1 ? P.l+iw/2 : P.l + (i/(n-1))*iw;
   const Y = (v) => P.t + ih - (v/maxVal)*ih;
 
-  let bars = "";
-  filas.forEach((f, i) => {
-    const cx = P.l + groupW*i + groupW/2;
-    // Nominal
-    const xN = hayInflacion ? cx - barW - 3 : cx - barW/2;
-    bars += `<rect x="${xN}" y="${Y(f.nominal).toFixed(1)}" width="${barW}" height="${(P.t+ih-Y(f.nominal)).toFixed(1)}" fill="#4C8DFF" rx="2"/>`;
-    if (hayInflacion) {
-      const xR = cx + 3;
-      bars += `<rect x="${xR}" y="${Y(f.real).toFixed(1)}" width="${barW}" height="${(P.t+ih-Y(f.real)).toFixed(1)}" fill="#2DD4BF" rx="2"/>`;
-    }
-    bars += `<text x="${cx}" y="${H-14}" fill="#64748B" font-size="11" text-anchor="middle">${f.y}</text>`;
-  });
-  const leyenda = hayInflacion
-    ? `<g><rect x="${P.l}" y="2" width="10" height="10" fill="#4C8DFF" rx="2"/><text x="${P.l+14}" y="11" font-size="10" fill="#64748B">Nominal</text>
-       <rect x="${P.l+70}" y="2" width="10" height="10" fill="#2DD4BF" rx="2"/><text x="${P.l+84}" y="11" font-size="10" fill="#64748B">Real (pesos hoy)</text></g>`
-    : "";
-  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="dash-svg">
-    <text x="6" y="${Y(maxVal)+4}" fill="#94A3B8" font-size="10">${money(maxVal)}</text>
-    <text x="6" y="${P.t+ih}" fill="#94A3B8" font-size="10">$0</text>
-    ${bars}${leyenda}
-  </svg>`;
+  const linePts = (key) => filas.map((f,i)=>`${X(i).toFixed(1)},${Y(f[key]).toFixed(1)}`).join(" ");
+  const dots = (key,color) => filas.map((f,i)=>`<circle cx="${X(i).toFixed(1)}" cy="${Y(f[key]).toFixed(1)}" r="3" fill="${color}"/>`).join("");
+
+  let grid = "";
+  for (let g=0; g<=3; g++){ const v=maxVal*g/3, yy=Y(v);
+    grid += `<line x1="${P.l}" y1="${yy.toFixed(1)}" x2="${W-P.r}" y2="${yy.toFixed(1)}" stroke="#EDF1F6"/><text x="${P.l-6}" y="${(yy+3).toFixed(1)}" fill="#94A3B8" font-size="10" text-anchor="end">${money(v)}</text>`; }
+  const xlabels = filas.map((f,i)=>`<text x="${X(i).toFixed(1)}" y="${H-16}" fill="#64748B" font-size="11" text-anchor="middle">${f.y}</text>`).join("");
+  const leyenda = `<rect x="${P.l}" y="2" width="10" height="10" fill="#4C8DFF" rx="2"/><text x="${P.l+14}" y="11" font-size="10" fill="#64748B">Nominal</text>`
+    + (hayInflacion?`<rect x="${P.l+70}" y="2" width="10" height="10" fill="#2DD4BF" rx="2"/><text x="${P.l+84}" y="11" font-size="10" fill="#64748B">Real (pesos hoy)</text>`:"");
+
+  host.innerHTML = `
+    <div class="evol-chart-box">
+      <svg viewBox="0 0 ${W} ${H}" class="dash-svg" id="evol-svg" preserveAspectRatio="none">
+        ${grid}
+        <line id="evol-guide" x1="0" y1="${P.t}" x2="0" y2="${P.t+ih}" stroke="#94A3B8" stroke-dasharray="3 3" opacity="0"/>
+        <polyline points="${linePts('nominal')}" fill="none" stroke="#4C8DFF" stroke-width="2.5"/>
+        ${hayInflacion?`<polyline points="${linePts('real')}" fill="none" stroke="#2DD4BF" stroke-width="2.5"/>`:""}
+        ${dots('nominal','#4C8DFF')}
+        ${hayInflacion?dots('real','#2DD4BF'):""}
+        <circle id="evol-hn" r="5" fill="#4C8DFF" opacity="0"/>
+        ${hayInflacion?`<circle id="evol-hr" r="5" fill="#2DD4BF" opacity="0"/>`:""}
+        ${xlabels}${leyenda}
+        <rect id="evol-hit" x="${P.l}" y="${P.t}" width="${iw}" height="${ih}" fill="transparent" style="cursor:crosshair"/>
+      </svg>
+      <div id="evol-tip" class="evol-tip" style="display:none"></div>
+    </div>`;
+
+  const svg = $("#evol-svg"), hit = $("#evol-hit"), tip = $("#evol-tip");
+  const guide = $("#evol-guide"), hn = $("#evol-hn"), hr = $("#evol-hr");
+  if (!svg || !hit) return;
+  const move = (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const px = (ev.clientX - rect.left) / rect.width * W;
+    let i = Math.round((px - P.l) / (iw/(n>1?n-1:1)));
+    i = Math.max(0, Math.min(n-1, i));
+    const f = filas[i], gx = X(i);
+    guide.setAttribute("x1", gx); guide.setAttribute("x2", gx); guide.setAttribute("opacity","1");
+    hn.setAttribute("cx", gx); hn.setAttribute("cy", Y(f.nominal)); hn.setAttribute("opacity","1");
+    if (hr) { hr.setAttribute("cx", gx); hr.setAttribute("cy", Y(f.real)); hr.setAttribute("opacity","1"); }
+    tip.style.display = "block";
+    tip.style.left = ((gx / W) * 100) + "%";
+    tip.innerHTML = `<b>${f.y}</b><span class="et-n">Nominal: ${money(f.nominal)}</span>${hayInflacion?`<span class="et-r">Real: ${money(f.real)}</span>`:""}`;
+  };
+  const leave = () => { tip.style.display="none"; guide.setAttribute("opacity","0"); hn.setAttribute("opacity","0"); if(hr) hr.setAttribute("opacity","0"); };
+  hit.addEventListener("mousemove", move);
+  hit.addEventListener("mouseleave", leave);
 }

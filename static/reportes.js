@@ -32,6 +32,99 @@ function agregarEncabezadoPDF(doc, empresa) {
   return 88; // Y donde puede empezar el contenido
 }
 
+// ── Motor de gráficos para reportes (canvas → PNG; sirve para Excel y PDF) ──
+function _fmtAbrev(v) {
+  const a = Math.abs(v);
+  if (a >= 1e9) return (v/1e9).toFixed(1)+"MM";
+  if (a >= 1e6) return (v/1e6).toFixed(1)+"M";
+  if (a >= 1e3) return Math.round(v/1e3)+"k";
+  return String(Math.round(v));
+}
+const RPT_COLORS = ["#4C8DFF","#0E9F6E","#B26B00","#C0392B","#8B5CF6","#0B1F3A"];
+// spec: { type:"groupedBars"|"line"|"pie", width, height, title, labels:[], series:[{name,color,data:[]}] }
+function _chartPNG(spec) {
+  const W = spec.width || 560, H = spec.height || 240, scale = 2;
+  const cv = document.createElement("canvas");
+  cv.width = W*scale; cv.height = H*scale;
+  const ctx = cv.getContext("2d");
+  ctx.scale(scale, scale);
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,W,H);
+  ctx.textBaseline = "middle";
+  const padL = 54, padR = 14, padT = spec.title ? 30 : 14, padB = 42;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  if (spec.title) { ctx.fillStyle = "#0B1F3A"; ctx.font = "bold 13px Arial"; ctx.textAlign = "left"; ctx.fillText(spec.title, 14, 16); }
+
+  if (spec.type === "pie") {
+    const data = spec.series[0].data, labels = spec.labels;
+    const total = data.reduce((s,v)=>s+Math.abs(v),0) || 1;
+    let a0 = -Math.PI/2;
+    const cx = padL + plotW*0.28, cy = padT + plotH/2, rad = Math.min(plotW*0.28, plotH/2) - 4;
+    data.forEach((v,i) => {
+      const ang = Math.abs(v)/total * Math.PI*2;
+      ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,rad,a0,a0+ang); ctx.closePath();
+      ctx.fillStyle = RPT_COLORS[i%RPT_COLORS.length]; ctx.fill(); a0 += ang;
+    });
+    ctx.textAlign = "left"; ctx.font = "11px Arial"; let ly = padT + 8;
+    labels.forEach((lb,i) => {
+      const lx = padL + plotW*0.62;
+      ctx.fillStyle = RPT_COLORS[i%RPT_COLORS.length]; ctx.fillRect(lx, ly-5, 10, 10);
+      ctx.fillStyle = "#16202E";
+      ctx.fillText(`${lb} — ${Math.round(Math.abs(data[i])/total*100)}%`, lx+16, ly);
+      ly += 18;
+    });
+    return { dataURL: cv.toDataURL("image/png"), w: W, h: H };
+  }
+
+  let allVals = []; spec.series.forEach(s => allVals = allVals.concat(s.data));
+  let maxV = Math.max(0, ...allVals), minV = Math.min(0, ...allVals);
+  if (maxV === minV) maxV = minV + 1;
+  const y = (v) => padT + (1 - (v-minV)/(maxV-minV)) * plotH;
+  const n = spec.labels.length, bandW = plotW / (n||1);
+  ctx.strokeStyle = "#E1E7EF"; ctx.lineWidth = 1;
+  ctx.fillStyle = "#8496A8"; ctx.font = "10px Arial"; ctx.textAlign = "right";
+  for (let g=0; g<=4; g++) {
+    const val = minV + (maxV-minV)*g/4, yy = y(val);
+    ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(W-padR, yy); ctx.stroke();
+    ctx.fillText(_fmtAbrev(val), padL-6, yy);
+  }
+  ctx.textAlign = "center"; ctx.fillStyle = "#8496A8"; ctx.font = "10px Arial";
+  spec.labels.forEach((lb,i) => ctx.fillText(lb, padL + bandW*(i+0.5), H - padB + 14));
+
+  if (spec.type === "line") {
+    spec.series.forEach((s,si) => {
+      ctx.strokeStyle = s.color || RPT_COLORS[si%RPT_COLORS.length]; ctx.lineWidth = 2.5; ctx.beginPath();
+      s.data.forEach((v,i) => { const x = padL + bandW*(i+0.5), yy = y(v); if (i===0) ctx.moveTo(x,yy); else ctx.lineTo(x,yy); });
+      ctx.stroke();
+    });
+  } else {
+    const ns = spec.series.length, gap = bandW*0.2, barW = (bandW - gap) / ns;
+    spec.series.forEach((s,si) => {
+      ctx.fillStyle = s.color || RPT_COLORS[si%RPT_COLORS.length];
+      s.data.forEach((v,i) => { const x = padL + bandW*i + gap/2 + barW*si, yv = y(v), y0 = y(0); ctx.fillRect(x, Math.min(yv,y0), barW*0.9, Math.abs(yv-y0)); });
+    });
+  }
+  if (spec.series.length > 1 || spec.series[0].name) {
+    ctx.textAlign = "left"; ctx.font = "10px Arial"; let lx = padL;
+    spec.series.forEach((s,si) => {
+      ctx.fillStyle = s.color || RPT_COLORS[si%RPT_COLORS.length]; ctx.fillRect(lx, H-14, 10, 10);
+      ctx.fillStyle = "#16202E"; const nm = s.name||("Serie "+(si+1)); ctx.fillText(nm, lx+14, H-9);
+      lx += 14 + nm.length*6 + 18;
+    });
+  }
+  return { dataURL: cv.toDataURL("image/png"), w: W, h: H };
+}
+function _xlsAddChart(wb, ws, spec, col, row) {
+  const img = _chartPNG(spec);
+  const id = wb.addImage({ base64: img.dataURL, extension: "png" });
+  ws.addImage(id, { tl: { col, row }, ext: { width: img.w, height: img.h } });
+}
+function _pdfAddChart(doc, spec, x, y, wPt) {
+  const img = _chartPNG(spec);
+  const hPt = wPt * img.h / img.w;
+  doc.addImage(img.dataURL, "PNG", x, y, wPt, hPt);
+  return y + hPt;
+}
+
 // ── Helpers Excel (ExcelJS con estilos de marca) ────────────────
 const XLS_NAVY = "FF0B1F3A", XLS_TEAL = "FF2DD4BF", XLS_GREY = "FFF2F2F2", XLS_WHITE = "FFFFFFFF";
 const XLS_MONEY = '"$"#,##0;("$"#,##0)';
@@ -219,6 +312,16 @@ async function exportarRendimientoExcel(detalle, label, to) {
   ws.getRow(r).getCell(1).value = "Rendimiento devengado = Monto × Tasa × Días/365 (interés simple, sin comisiones ni impuestos)."; r++;
   const nota = ws.getRow(r).getCell(1); nota.value = "Este es dinero que, sin colocarlo, habría quedado parado en la cuenta sin generar nada.";
   nota.font = { italic:true, bold:true, color:{argb:"FF2E7D32"} };
+  try {
+    if (detalle.length) {
+      r += 2;
+      _xlsAddChart(wb, ws, {
+        type:"groupedBars", title:"Rendimiento por colocación", width:560, height:230,
+        labels: detalle.map(x => (x.inv.label||"").slice(0,14) || tipoInvLabel(x.inv.tipo)),
+        series:[{ color:"#0E9F6E", data: detalle.map(x => x.rend) }],
+      }, 0, r);
+    }
+  } catch (e) { console.warn("Gráfico rendimiento xlsx:", e); }
   await _xlsSave(wb, `Rendimiento_Excedente_${(label||"").replace(/\s+/g,"_")}.xlsx`);
 }
 
@@ -257,6 +360,17 @@ function exportarRendimientoPDF(detalle, label, to) {
   doc.text("Rendimiento devengado = Monto x Tasa x Dias/365 (interés simple, sin comisiones/impuestos).", 40, fy);
   doc.setTextColor(46,125,50); doc.setFont("helvetica","bold");
   doc.text("Este es dinero que, sin colocarlo, habría quedado parado en la cuenta sin generar nada.", 40, fy+14);
+  try {
+    if (detalle.length) {
+      let cy = fy + 34;
+      if (cy > 560) { doc.addPage(); cy = 60; }
+      _pdfAddChart(doc, {
+        type:"groupedBars", title:"Rendimiento por colocación", width:520, height:220,
+        labels: detalle.map(x => (x.inv.label||"").slice(0,14) || tipoInvLabel(x.inv.tipo)),
+        series:[{ color:"#0E9F6E", data: detalle.map(x => x.rend) }],
+      }, 40, cy, 480);
+    }
+  } catch (e) { console.warn("Gráfico rendimiento PDF:", e); }
   doc.save(`Rendimiento_Excedente_${(label||"").replace(/\s+/g,"_")}.pdf`);
 }
 
@@ -288,6 +402,15 @@ async function exportarEstadoResultadosXlsx(acum, label) {
   r++;
   const nota = ws.getRow(r).getCell(1); nota.value = "Devengado = se imputa a la fecha de emisión del comprobante, no a la de cobro/pago (a diferencia del Flujo de Caja).";
   nota.font = { italic:true, size:9, color:{argb:"FF787878"} };
+  try {
+    const rn = tIng - tCos - tGas - tImp - tFin;
+    r += 2;
+    _xlsAddChart(wb, ws, {
+      type:"groupedBars", title:"Resultado del período", width:520, height:220,
+      labels:["Ingresos","Costos","Gastos","Impuestos","Financ.","Resultado"],
+      series:[{ color:"#4C8DFF", data:[tIng, tCos, tGas, tImp, tFin, rn] }],
+    }, 0, r);
+  } catch (e) { console.warn("Gráfico estado xlsx:", e); }
   await _xlsSave(wb, `Estado_de_Resultados_${label.replace(/\s+/g,"_")}.xlsx`);
 }
 
@@ -320,6 +443,16 @@ function exportarEstadoResultadosPdf(acum, label) {
   let fy = doc.lastAutoTable.finalY + 14;
   doc.setFontSize(8); doc.setTextColor(90,90,90);
   doc.text("Devengado = se imputa a la fecha de emisión del comprobante, no a la de cobro/pago (a diferencia del Flujo de Caja).", 40, fy);
+  try {
+    const rn = tIng - tCos - tGas - tImp - tFin;
+    let cy = fy + 18;
+    if (cy > 560) { doc.addPage(); cy = 60; }
+    _pdfAddChart(doc, {
+      type:"groupedBars", title:"Resultado del período", width:520, height:220,
+      labels:["Ingresos","Costos","Gastos","Impuestos","Financ.","Resultado"],
+      series:[{ color:"#4C8DFF", data:[tIng, tCos, tGas, tImp, tFin, rn] }],
+    }, 40, cy, 480);
+  } catch (e) { console.warn("Gráfico estado PDF:", e); }
   doc.save(`Estado_de_Resultados_${label.replace(/\s+/g,"_")}.pdf`);
 }
 
@@ -500,6 +633,35 @@ async function exportarReporteFiscalExcel() {
     (varInter!=null ? `• Las ventas ${varInter>=0?"crecieron":"cayeron"} un ${Math.abs(varInter*100).toFixed(1)}% interanual.` : "• Sin base interanual para comparar todavía."),
     "• El resultado documental NO es la base imponible de Ganancias (requiere puente contable-fiscal).",
     "• La caja requiere conciliación bancaria para confirmar saldos." ].forEach(t => { const row=wsD.getRow(r); row.getCell(1).value=t; wsD.mergeCells(r,1,r,5); row.getCell(1).font={size:10,color:{argb:"FF444444"}}; r++; });
+
+  // ── Gráficos del Dashboard (imágenes) ──
+  try {
+    r += 1;
+    const mm = mesesOrd.slice(-12);
+    if (mm.length) {
+      const labelsM = mm.map(m => m.slice(2));
+      _xlsAddChart(wb, wsD, {
+        type:"groupedBars", title:"Ventas vs Compras por mes", width:560, height:230, labels: labelsM,
+        series:[
+          { name:"Ventas netas", color:"#4C8DFF", data: mm.map(m=>meses[m].ventasNeto) },
+          { name:"Compras", color:"#B26B00", data: mm.map(m=>meses[m].comprasBase) },
+        ],
+      }, 0, r); r += 13;
+      _xlsAddChart(wb, wsD, {
+        type:"line", title:"IVA a pagar por mes (débito − crédito)", width:560, height:210, labels: labelsM,
+        series:[{ name:"IVA preliminar", color:"#0E9F6E", data: mm.map(m=>meses[m].ivaDebito - meses[m].ivaCredito) }],
+      }, 0, r); r += 12;
+    }
+    const catMap = {};
+    compras.forEach(c => { const k = c.categoria || "Otros"; catMap[k] = (catMap[k]||0) + (c.neto||0); });
+    const cats = Object.keys(catMap).sort((a,b)=>catMap[b]-catMap[a]).slice(0,6);
+    if (cats.length) {
+      _xlsAddChart(wb, wsD, {
+        type:"pie", title:"Compras por categoría", width:560, height:220,
+        labels: cats, series:[{ data: cats.map(k=>catMap[k]) }],
+      }, 0, r); r += 12;
+    }
+  } catch (e) { console.warn("Gráficos fiscal:", e); }
 
   // ═══ Hoja 2: INDICADORES MENSUALES ═══
   const wsI = wb.addWorksheet("Indicadores_Mensuales");

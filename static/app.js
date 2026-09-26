@@ -260,6 +260,43 @@ function loadState() {
 function clearState() {
   localStorage.removeItem(STORE_KEY);
 }
+
+// ── Backup manual (descargar / restaurar) ─────────────────
+function descargarBackup() {
+  let data = null;
+  try { data = JSON.parse(localStorage.getItem(STORE_KEY) || "null"); } catch (e) {}
+  if (!data) { try { data = JSON.parse(JSON.stringify(state)); } catch (e) {} }
+  const nombreEmp = (state.empresa && state.empresa.nombre) || "backup";
+  const envelope = { app: "calce", schema: "v1", exportedAt: new Date().toISOString(), empresa: nombreEmp, data: data };
+  const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: "application/json" });
+  const slug = nombreEmp.replace(/[^\w\-]+/g, "_").slice(0, 40) || "backup";
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `calce_backup_${slug}_${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  try { localStorage.setItem("calce.lastBackupAt", Date.now().toString()); } catch (e) {}
+}
+
+function restaurarBackup(file) {
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    let parsed;
+    try { parsed = JSON.parse(ev.target.result); } catch (e) { alert("El archivo no es un backup válido de Calce."); return; }
+    let data = null;
+    if (parsed && parsed.app === "calce" && parsed.data && typeof parsed.data === "object") data = parsed.data;
+    else if (parsed && (parsed.movements || parsed.accounts || parsed.comprobantes)) data = parsed; // backup viejo sin sobre
+    if (!data) { alert("Este archivo no parece un backup válido de Calce."); return; }
+    if (!confirm("Esto va a REEMPLAZAR todos los datos actuales por los del backup. Guardamos una copia de lo actual por las dudas. ¿Continuar?")) return;
+    try { localStorage.setItem("calce.state.presync", localStorage.getItem(STORE_KEY) || ""); } catch (e) {}
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); } catch (e) { alert("No se pudo restaurar el backup."); return; }
+    loadState(); project();
+    if (window.Cloud && window.Cloud.currentCompany && window.Cloud.currentCompany()) { try { window.Cloud.push(); } catch (e) {} }
+    switchView("dashboard");
+    alert("Backup restaurado correctamente.");
+  };
+  reader.readAsText(file);
+}
 function flashSaved() {
   const el = $("#save-indicator");
   if (!el) return;
@@ -2477,6 +2514,144 @@ function resetEscenario() {
 
 // ═══ DASHBOARD (Inicio) + motor de alertas ══════════════
 // Motor de alertas: revisa el estado y devuelve avisos priorizados
+// ── Proyección de caja (30 / 60 / 90 días) ───────────────
+function renderProyeccion() {
+  const wrap = $("#proyeccion-wrap");
+  if (!wrap) return;
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const iso = (d) => d.toISOString().slice(0,10);
+
+  // Serie ARS consolidada a 90 días (sin alterar el filtro actual del flujo)
+  const prevCcy = state.cfCurrency, prevAcct = state.cfAccount;
+  state.cfCurrency = "ARS"; state.cfAccount = "";
+  const to = new Date(hoy); to.setDate(to.getDate() + 90);
+  const serie = computeDaySeries(iso(hoy), iso(to));
+  state.cfCurrency = prevCcy; state.cfAccount = prevAcct;
+
+  const colchon = parseFloat(state.prefs.colchon) || 0;
+  const saldoHoy = serie.length ? serie[0].balance : 0;
+
+  const at = (hDias) => {
+    const win = serie.slice(0, Math.min(hDias + 1, serie.length));
+    const fin = win.length ? win[win.length - 1].balance : saldoHoy;
+    let min = Infinity, minDate = null;
+    win.forEach(d => { if (d.balance < min) { min = d.balance; minDate = d.date; } });
+    if (min === Infinity) min = fin;
+    return { fin, min, minDate };
+  };
+  const h30 = at(30), h60 = at(60), h90 = at(90);
+
+  const primerRojo = serie.find(d => d.balance < 0);
+  const primerAjustado = serie.find(d => d.balance < colchon && d.balance >= 0);
+  let peor = serie[0] || { balance: saldoHoy, date: iso(hoy) };
+  serie.forEach(d => { if (d.balance < peor.balance) peor = d; });
+  const diasHasta = (fecha) => Math.round((new Date(fecha + "T00:00:00") - hoy) / 86400000);
+
+  let banner;
+  if (primerRojo) {
+    const dias = diasHasta(primerRojo.date);
+    banner = `<div class="proy-banner crit"><span class="proy-banner-ico">▼</span>
+      <div><b>Te vas a quedar corto el ${fmtDateFull(primerRojo.date)}${dias <= 0 ? " (hoy)" : ` — en ${dias} días`}.</b>
+      <span>Tu saldo proyectado cae a ${moneyC(primerRojo.balance, "ARS")}. En el peor momento (${fmtDateShort(peor.date)}) te faltarían ${moneyC(Math.abs(peor.balance), "ARS")} para no quedar en descubierto.</span></div></div>`;
+  } else if (primerAjustado) {
+    const dias = diasHasta(primerAjustado.date);
+    banner = `<div class="proy-banner warn"><span class="proy-banner-ico">◆</span>
+      <div><b>Vas a estar ajustado el ${fmtDateFull(primerAjustado.date)}${dias <= 0 ? "" : ` — en ${dias} días`}.</b>
+      <span>Tu saldo baja a ${moneyC(peor.balance, "ARS")}, por debajo de tu colchón de ${moneyC(colchon, "ARS")}. No entrás en descubierto, pero conviene tener un plan.</span></div></div>`;
+  } else {
+    banner = `<div class="proy-banner ok"><span class="proy-banner-ico">✓</span>
+      <div><b>Tu caja aguanta los próximos 90 días.</b>
+      <span>El punto más bajo es ${moneyC(peor.balance, "ARS")} el ${fmtDateShort(peor.date)}, por encima de tu colchón. Tenés margen para invertir el excedente.</span></div></div>`;
+  }
+
+  const card = (label, hh) => {
+    const cls = hh.fin < 0 ? "neg" : (hh.fin < colchon ? "warn" : "pos");
+    const minCls = hh.min < 0 ? "neg" : (hh.min < colchon ? "warn" : "");
+    return `<div class="proy-card">
+      <div class="proy-card-h">${label}</div>
+      <div class="proy-card-val ${cls}">${moneyC(hh.fin, "ARS")}</div>
+      <div class="proy-card-min ${minCls}">Mínimo: ${moneyC(hh.min, "ARS")}${hh.minDate ? ` · ${fmtDateShort(hh.minDate)}` : ""}</div>
+    </div>`;
+  };
+
+  wrap.innerHTML = `
+    <div class="mkt-head"><div class="eyebrow">Tesorería</div>
+      <h2 class="inv-title">Proyección de caja</h2>
+      <p class="inv-sub">Con tus movimientos y las facturas pendientes, así queda tu saldo a 30, 60 y 90 días. Si en algún momento te quedás corto, te lo avisamos acá.</p></div>
+    ${banner}
+    <div class="proy-cards">
+      <div class="proy-card hoy"><div class="proy-card-h">Saldo hoy</div><div class="proy-card-val">${moneyC(saldoHoy, "ARS")}</div><div class="proy-card-min">colchón objetivo: ${moneyC(colchon, "ARS")}</div></div>
+      ${card("A 30 días", h30)}
+      ${card("A 60 días", h60)}
+      ${card("A 90 días", h90)}
+    </div>
+    <div class="card proy-chart-card"><div class="chart-head"><h2>Saldo proyectado · 90 días</h2></div><div id="proy-chart"></div></div>
+    <div class="card proy-mov-card"><div class="chart-head"><h2>Qué mueve la aguja (próximos 90 días)</h2></div><div id="proy-movs"></div></div>`;
+
+  dibujarProyChart(serie, colchon);
+  renderProyMovimientos(hoy, to);
+}
+
+function dibujarProyChart(serie, colchon) {
+  const host = $("#proy-chart");
+  if (!host || !serie.length) { if (host) host.innerHTML = ""; return; }
+  const W = 1000, H = 240, padL = 8, padR = 8, padT = 16, padB = 22;
+  const vals = serie.map(d => d.balance);
+  let minV = Math.min(0, colchon, ...vals), maxV = Math.max(0, colchon, ...vals);
+  if (minV === maxV) maxV = minV + 1;
+  const n = serie.length;
+  const x = (i) => padL + (i / (n - 1)) * (W - padL - padR);
+  const y = (v) => padT + (1 - (v - minV) / (maxV - minV)) * (H - padT - padB);
+  const pts = serie.map((d, i) => `${x(i).toFixed(1)},${y(d.balance).toFixed(1)}`).join(" ");
+  const y0 = y(0), yC = y(colchon);
+  // Área bajo cero (rojo) usando un clip simple: polígono del área < 0
+  const areaNeg = serie.map((d, i) => `${x(i).toFixed(1)},${y(Math.min(0, d.balance)).toFixed(1)}`).join(" ");
+  let peor = serie[0]; serie.forEach(d => { if (d.balance < peor.balance) peor = d; });
+  const pi = serie.indexOf(peor);
+  const marcas = [30, 60, 90].filter(h => h < n);
+  host.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="none" class="proy-svg">
+      <polygon points="${padL},${y0} ${areaNeg} ${x(n-1)},${y0}" fill="rgba(192,57,43,.10)"></polygon>
+      <line x1="${padL}" y1="${y0}" x2="${W-padR}" y2="${y0}" stroke="#8496A8" stroke-width="1.5" stroke-dasharray="4 4"></line>
+      ${colchon > 0 ? `<line x1="${padL}" y1="${yC}" x2="${W-padR}" y2="${yC}" stroke="#B26B00" stroke-width="1.2" stroke-dasharray="2 5"></line>` : ""}
+      ${marcas.map(h => `<line x1="${x(h)}" y1="${padT}" x2="${x(h)}" y2="${H-padB}" stroke="#E1E7EF" stroke-width="1"></line><text x="${x(h)}" y="${H-6}" fill="#8496A8" font-size="12" text-anchor="middle">${h}d</text>`).join("")}
+      <polyline points="${pts}" fill="none" stroke="#4C8DFF" stroke-width="2.5"></polyline>
+      <circle cx="${x(pi).toFixed(1)}" cy="${y(peor.balance).toFixed(1)}" r="4" fill="${peor.balance < 0 ? "#C0392B" : "#0E9F6E"}"></circle>
+    </svg>`;
+}
+
+function renderProyMovimientos(hoy, to) {
+  const host = $("#proy-movs");
+  if (!host) return;
+  const acctIds = new Set(state.accounts.filter(a => a.moneda === "ARS").map(a => a.id));
+  const horizonEnd = new Date(to); horizonEnd.setDate(horizonEnd.getDate() + 1);
+  const items = [];
+  (readMovements ? readMovements() : state.movements).forEach((m) => {
+    if (!m.amount || !m.date || !acctIds.has(m.account)) return;
+    const base = new Date(m.date + "T00:00:00");
+    const add = (d) => { if (d >= hoy && d <= horizonEnd) items.push({ date: d.toISOString().slice(0,10), label: m.label, amount: m.amount }); };
+    if (m.recurrence === "none" || !m.recurrence) { add(base); return; }
+    let d = new Date(base), guard = 0;
+    while (d <= horizonEnd && guard < 400) {
+      add(d);
+      if (m.recurrence === "weekly") d.setDate(d.getDate()+7);
+      else if (m.recurrence === "quincenal") d.setDate(d.getDate()+14);
+      else if (m.recurrence === "monthly") d.setMonth(d.getMonth()+1);
+      else if (m.recurrence === "quarterly") d.setMonth(d.getMonth()+3);
+      else break;
+      guard++;
+    }
+  });
+  items.sort((a,b) => Math.abs(b.amount) - Math.abs(a.amount));
+  const top = items.slice(0, 6);
+  if (!top.length) { host.innerHTML = `<p class="cf-empty">No hay movimientos previstos en los próximos 90 días.</p>`; return; }
+  host.innerHTML = `<table class="cf-table"><thead><tr><th>Fecha</th><th>Concepto</th><th style="text-align:right">Monto</th></tr></thead>
+    <tbody>${top.map(it => `<tr>
+      <td>${fmtDateShort(it.date)}</td>
+      <td>${h(it.label || "—")}</td>
+      <td class="mono ${it.amount < 0 ? "neg" : "pos"}" style="text-align:right">${moneyC(it.amount, "ARS")}</td></tr>`).join("")}</tbody></table>`;
+}
+
 function generarAlertas() {
   const alertas = [];
   const hoy = new Date(); hoy.setHours(0,0,0,0);
@@ -5874,6 +6049,7 @@ function renderConfig() {
         <p class="cfg-hint">La sincronización con la nube todavía no está activada en esta instalación. Por ahora tus datos se guardan solo en este navegador.</p>`;
     } else if (cUser) {
       const cCode = window.Cloud.currentCompany();
+      const cCodigo = window.Cloud.companyCode ? window.Cloud.companyCode() : null;
       panel = `
         <div class="cfg-sec-head"><h3>Cuenta y nube</h3></div>
         <div class="cloud-card cloud-on">
@@ -5882,7 +6058,13 @@ function renderConfig() {
           <p class="cfg-hint" style="margin:10px 0">Tus datos se guardan <b>automáticamente en la nube</b> con cada cambio. Vos y tu equipo comparten los mismos datos de la empresa desde cualquier computadora.</p>
           ${cCode ? `<div style="margin:12px 0">
             <small class="muted"><b>Código para invitar a tu equipo</b></small>
-            <p class="cfg-hint" style="margin:2px 0 6px">Compartí este código con quien quieras que vea los datos de tu empresa. Lo pega en "Unirme con código" al crear su cuenta.</p>
+            <p class="cfg-hint" style="margin:2px 0 6px">Elegí un código corto y fácil (ej. <b>CONSULTORIO</b>). Tu equipo lo usa en "Unirme con código" al crear su cuenta.</p>
+            <div class="cloud-code-row">
+              <input type="text" id="cloud-code-input" class="cfg-code-input" placeholder="Ej. CONSULTORIO" value="${cCodigo ? h(cCodigo) : ""}">
+              <button class="btn-primary sm" id="cloud-code-save">Guardar código</button>
+            </div>
+            <div id="cloud-code-msg" class="cloud-msg"></div>
+            <p class="cfg-hint" style="margin:10px 0 4px">O invitá con el código largo:</p>
             <div class="cloud-code-row"><span class="cloud-code" id="cloud-code">${h(cCode)}</span>
               <button class="btn-ghost sm" id="cloud-copy">Copiar</button></div>
           </div>` : ""}
@@ -5910,6 +6092,12 @@ function renderConfig() {
       <div class="cfg-sec-head"><h3>Datos y respaldo</h3></div>
       <p class="cfg-hint">Todos tus datos se guardan en este navegador. Podés reiniciar la app para empezar de cero.</p>
       <div class="cfg-datos-actions">
+        <button class="btn-primary sm" id="cfg-backup-dl">↓ Descargar backup</button>
+        <button class="btn-ghost sm" id="cfg-backup-up">↑ Restaurar backup</button>
+        <input type="file" id="cfg-backup-file" accept=".json,application/json" style="display:none">
+      </div>
+      <p class="cfg-hint" style="margin-top:8px">Descargá un backup cada tanto (por ejemplo, una vez por semana). Es un archivo con todos tus datos que podés guardar o usar para pasarlos a otra computadora.</p>
+      <div class="cfg-datos-actions" style="margin-top:14px">
         <button class="btn-ghost" id="cfg-load-demo">Cargar datos de ejemplo (consultorio)</button>
         <button class="btn-ghost cfg-danger" id="cfg-reset">Borrar todos mis datos</button>
       </div>
@@ -5949,6 +6137,14 @@ function renderConfig() {
       loadDemoDataset(DEMO_CONSULTORIO);
       saveState(); project(); switchView("dashboard");
     };
+    const dlBtn = $("#cfg-backup-dl");
+    if (dlBtn) dlBtn.onclick = () => descargarBackup();
+    const upBtn = $("#cfg-backup-up");
+    const fileInput = $("#cfg-backup-file");
+    if (upBtn && fileInput) {
+      upBtn.onclick = () => fileInput.click();
+      fileInput.onchange = (e) => { const f = e.target.files[0]; if (f) restaurarBackup(f); e.target.value = ""; };
+    }
     return;
   }
   if (sec === "empresa") {
@@ -6018,6 +6214,17 @@ function renderConfig() {
     if (copyBtn) copyBtn.onclick = () => {
       const code = window.Cloud.currentCompany() || "";
       navigator.clipboard?.writeText(code).then(() => { copyBtn.textContent = "¡Copiado!"; setTimeout(() => { copyBtn.textContent = "Copiar"; }, 1500); });
+    };
+    const codeSave = $("#cloud-code-save");
+    if (codeSave) codeSave.onclick = async () => {
+      const val = ($("#cloud-code-input").value || "").trim();
+      const msgEl = $("#cloud-code-msg");
+      const setMsg = (t, err) => { if (msgEl) { msgEl.textContent = t; msgEl.className = "cloud-msg" + (err ? " err" : " ok"); } };
+      if (!/^[A-Za-z0-9_-]{3,24}$/.test(val)) return setMsg("Usá 3 a 24 letras/números, sin espacios.", true);
+      codeSave.disabled = true; setMsg("Guardando…", false);
+      try { await window.Cloud.setCompanyCode(val); setMsg("¡Código guardado! Ya podés invitar con “" + val + "”.", false); }
+      catch (e) { setMsg(e.message || "No se pudo guardar el código.", true); }
+      codeSave.disabled = false;
     };
     const msg = (t, err) => { const m = $("#cloud-msg"); if (m) { m.textContent = t; m.className = "cloud-msg" + (err ? " err" : " ok"); } };
     const inBtn = $("#cloud-signin");
@@ -6148,6 +6355,7 @@ function switchView(view) {
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${view}`).classList.remove("hidden");
   if (view === "dashboard") renderDashboard();
+  if (view === "proyeccion") renderProyeccion();
   if (view === "saldos") renderSaldos();
   if (view === "comprobantes") renderComprobantes();
   if (view === "cartera") renderCartera();

@@ -1625,3 +1625,36 @@ input:focus, select:focus {
 .opc-colocar { margin-top: auto; padding: 9px; border: none; border-radius: 8px; background: var(--navy); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; font-family: "Inter", sans-serif; }
 .opc-colocar:hover { background: var(--navy-2); }
 .opc-src { font-size: 11.5px; color: var(--slate-2); margin: 14px 0 0; }
+
+/* ── Proyección de caja (30/60/90) ─────────────────────── */
+.proy-banner { display: flex; gap: 12px; align-items: flex-start; border-radius: 12px; padding: 16px 18px; margin: 4px 0 18px; }
+.proy-banner b { display: block; font-size: 15px; margin-bottom: 3px; }
+.proy-banner span { font-size: 13px; line-height: 1.5; }
+.proy-banner-ico { font-size: 18px; flex: 0 0 auto; margin-top: 1px; }
+.proy-banner.crit { background: var(--red-bg); color: #7a2018; } .proy-banner.crit .proy-banner-ico { color: var(--red); }
+.proy-banner.warn { background: var(--amber-bg); color: #6b4200; } .proy-banner.warn .proy-banner-ico { color: var(--amber); }
+.proy-banner.ok { background: var(--teal-bg); color: #0a5248; } .proy-banner.ok .proy-banner-ico { color: var(--teal); }
+.proy-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.proy-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; box-shadow: var(--shadow); }
+.proy-card.hoy { background: var(--navy); border-color: var(--navy); }
+.proy-card.hoy .proy-card-h, .proy-card.hoy .proy-card-val, .proy-card.hoy .proy-card-min { color: #fff; }
+.proy-card-h { font-size: 12px; font-weight: 600; color: var(--slate); text-transform: uppercase; letter-spacing: .3px; margin-bottom: 8px; }
+.proy-card-val { font-size: 22px; font-weight: 700; color: var(--ink); line-height: 1.1; }
+.proy-card-val.pos { color: var(--teal); } .proy-card-val.warn { color: var(--amber); } .proy-card-val.neg { color: var(--red); }
+.proy-card-min { font-size: 12px; color: var(--slate-2); margin-top: 6px; }
+.proy-card-min.warn { color: var(--amber); } .proy-card-min.neg { color: var(--red); }
+.proy-chart-card, .proy-mov-card { margin-bottom: 16px; }
+.proy-svg { display: block; height: 240px; }
+
+/* ── Evolución: gráfico de línea interactivo ───────────── */
+.evol-chart-box { position: relative; width: 100%; }
+.evol-chart-box #evol-svg { width: 100%; height: 250px; display: block; }
+.evol-tip { position: absolute; top: 8px; transform: translateX(-50%); background: var(--navy); color: #fff; border-radius: 8px; padding: 8px 10px; font-size: 12px; pointer-events: none; white-space: nowrap; box-shadow: 0 4px 14px rgba(11,31,58,.25); z-index: 5; }
+.evol-tip b { display: block; margin-bottom: 3px; font-size: 12px; }
+.evol-tip span { display: block; line-height: 1.5; }
+.evol-tip .et-n { color: #9DC3FF; }
+.evol-tip .et-r { color: #7FEFE0; }
+
+/* ── Código corto de empresa ───────────────────────────── */
+.cfg-code-input { flex: 1; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; font-family: "Inter", sans-serif; text-transform: uppercase; letter-spacing: .5px; }
+.cfg-code-input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px var(--teal-bg); }

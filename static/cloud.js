@@ -10,6 +10,7 @@ const Cloud = (() => {
   let sb = null;
   let user = null;
   let companyId = null;
+  let companyInfo = null; // { nombre, codigo }
   let pushTimer = null;
   let statusCb = null;
   let lastStatus = { kind: "off", msg: "" };
@@ -59,7 +60,7 @@ const Cloud = (() => {
 
   // ── Empresas ──────────────────────────────────────────
   async function resolveCompany() {
-    companyId = null;
+    companyId = null; companyInfo = null;
     if (!ensureClient() || !user) return null;
     try {
       const { data, error } = await sb.from("memberships")
@@ -67,11 +68,35 @@ const Cloud = (() => {
       if (!error && data && data.length) {
         companyId = data[0].company_id;
         try { localStorage.setItem(COMPANY_KEY, companyId); } catch (e) {}
+        await getCompanyInfo();
         return companyId;
       }
     } catch (e) {}
     try { localStorage.removeItem(COMPANY_KEY); } catch (e) {}
     return null;
+  }
+
+  async function getCompanyInfo() {
+    if (!ensureClient() || !user || !companyId) return null;
+    try {
+      const { data } = await sb.from("companies").select("nombre, codigo").eq("id", companyId).maybeSingle();
+      companyInfo = data || null;
+      return companyInfo;
+    } catch (e) { return null; }
+  }
+  function companyCode() { return (companyInfo && companyInfo.codigo) ? companyInfo.codigo : null; }
+
+  async function setCompanyCode(code) {
+    if (!ensureClient() || !user || !companyId) throw new Error("No hay empresa activa.");
+    const clean = (code || "").trim();
+    const { error } = await sb.rpc("set_company_code", { p_company: companyId, p_code: clean });
+    if (error) {
+      if ((error.message || "").toLowerCase().includes("duplicate") || error.code === "23505")
+        throw new Error("Ese código ya está en uso, probá con otro.");
+      throw error;
+    }
+    if (companyInfo) companyInfo.codigo = clean || null;
+    return clean;
   }
 
   async function createCompany(nombre) {
@@ -84,6 +109,7 @@ const Cloud = (() => {
       .insert({ company_id: cid, user_id: user.id, role: "owner" });
     if (e2) throw e2;
     companyId = cid;
+    companyInfo = { nombre: nombre, codigo: null };
     try { localStorage.setItem(COMPANY_KEY, cid); } catch (e) {}
     // Sembrar el estado de la empresa con lo que haya cargado local.
     await push();
@@ -92,14 +118,22 @@ const Cloud = (() => {
 
   async function joinCompany(code) {
     if (!ensureClient() || !user) throw new Error("No hay sesión.");
-    const cid = (code || "").trim();
-    if (!cid) throw new Error("Ingresá un código.");
-    const { error } = await sb.from("memberships")
-      .insert({ company_id: cid, user_id: user.id, role: "member" });
-    if (error) throw new Error("Código inválido o ya sos miembro de esa empresa.");
+    const raw = (code || "").trim();
+    if (!raw) throw new Error("Ingresá un código.");
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw);
+    let cid;
+    if (isUuid) {
+      const { error } = await sb.from("memberships").insert({ company_id: raw, user_id: user.id, role: "member" });
+      if (error) throw new Error("Código inválido o ya sos miembro de esa empresa.");
+      cid = raw;
+    } else {
+      const { data, error } = await sb.rpc("join_by_code", { p_code: raw });
+      if (error || !data) throw new Error("Código inválido o ya sos miembro de esa empresa.");
+      cid = data;
+    }
     companyId = cid;
     try { localStorage.setItem(COMPANY_KEY, cid); } catch (e) {}
-    // Traer el estado de la empresa (con backup de lo local).
+    await getCompanyInfo();
     const row = await pullRow();
     if (row) { applyCloud(row); } else { await push(); }
     return cid;
@@ -202,6 +236,7 @@ const Cloud = (() => {
     configured, boot, onLocalChange, onStatus, status,
     currentUser, currentCompany, needsCompany,
     resolveCompany, createCompany, joinCompany,
+    companyCode, getCompanyInfo, setCompanyCode,
     signIn, signUp, signOut, push,
   };
 })();
