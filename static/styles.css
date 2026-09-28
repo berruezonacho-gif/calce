@@ -1658,3 +1658,45 @@ input:focus, select:focus {
 /* ── Código corto de empresa ───────────────────────────── */
 .cfg-code-input { flex: 1; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; font-family: "Inter", sans-serif; text-transform: uppercase; letter-spacing: .5px; }
 .cfg-code-input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px var(--teal-bg); }
+
+.evol-chart-box svg { width: 100%; height: 250px; display: block; }
+
+.cfg-sec-sub { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--slate); margin: 4px 0 8px; }
+
+/* ── Motor costo del dinero ─────────────────────────────── */
+.cd-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 20px; box-shadow: var(--shadow); }
+.cd-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.cd-head h3 { font-size: 16px; color: var(--ink); margin: 0 0 4px; }
+.cd-head p { font-size: 13px; color: var(--slate); margin: 0; max-width: 560px; }
+.cd-reg { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--slate); }
+.cd-reg-btn { padding: 6px 11px; border: 1px solid var(--line); background: #fff; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--slate); cursor: pointer; font-family: "Inter", sans-serif; }
+.cd-reg-btn.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+.cd-banner { display: flex; gap: 10px; align-items: flex-start; border-radius: 10px; padding: 13px 15px; margin: 14px 0; font-size: 13.5px; line-height: 1.5; }
+.cd-banner.win { background: var(--teal-bg); color: #0a5248; } .cd-banner.win span { color: var(--teal); }
+.cd-banner.base { background: var(--paper); color: var(--ink); } .cd-banner.base span { color: var(--slate); }
+.cd-table th { font-size: 11px; }
+.cd-table tr.cd-best td { background: var(--teal-bg); }
+.cd-table tr.cd-base-row td { color: var(--slate); }
+.cd-tag { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 10px; white-space: nowrap; }
+.cd-tag.pub { background: #EAF0FE; color: #2563EB; } .cd-tag.corp { background: var(--line-2); color: var(--slate); }
+.cd-note { font-size: 11.5px; color: var(--slate-2); margin: 14px 0 0; line-height: 1.5; }
+
+/* ── Módulo de proyecto (costo del dinero) ─────────────── */
+.proy-inv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 8px; }
+.proy-ded-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.proy-ded-row .proy-ded-con { flex: 1; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 13px; font-family: "Inter", sans-serif; }
+.proy-ded-row .money-input { width: 160px; }
+.proy-ded-del { width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line); background: #fff; color: var(--slate-2); cursor: pointer; flex: 0 0 auto; }
+.proy-ded-del:hover { color: var(--red); border-color: var(--red); }
+.proy-inv-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.proy-inv-kpi { border: 1px solid var(--line); border-radius: 10px; padding: 13px 14px; }
+.proy-inv-kpi small { display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; color: var(--slate); margin-bottom: 5px; }
+.proy-inv-kpi b { font-size: 20px; color: var(--ink); }
+.proy-inv-kpi span { display: block; font-size: 11.5px; color: var(--slate-2); margin-top: 3px; }
+.proy-inv-kpi.hero { background: var(--navy); border-color: var(--navy); }
+.proy-inv-kpi.hero small, .proy-inv-kpi.hero b, .proy-inv-kpi.hero span { color: #fff; }
+.proy-inv-conc { display: flex; gap: 10px; align-items: flex-start; border-radius: 10px; padding: 13px 15px; margin-top: 14px; font-size: 13.5px; line-height: 1.5; }
+.proy-inv-conc.win { background: var(--teal-bg); color: #0a5248; } .proy-inv-conc.win span { color: inherit; } .proy-inv-conc.win > span:first-child { color: var(--teal); font-size: 16px; }
+.proy-inv-conc.lose { background: var(--amber-bg); color: #6b4200; } .proy-inv-conc.lose > span:first-child { color: var(--amber); font-size: 16px; }
+
+.cd-reportbtns { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 4px; }

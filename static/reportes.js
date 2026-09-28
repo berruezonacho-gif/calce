@@ -799,3 +799,211 @@ async function exportarReporteFiscalExcel() {
 }
 
 function money2(n){ return "$"+Math.round(n).toLocaleString("es-AR"); }
+
+// ════════════════════════════════════════════════════════════════
+// REPORTE DE DECISIÓN — PDF (foto fija) + Excel (modelo interactivo)
+// ════════════════════════════════════════════════════════════════
+function _pctR(v) { return (v * 100).toFixed(1) + "%"; }
+
+function exportarReporteDecisionPDF(d) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  let y = agregarEncabezadoPDF(doc, _emp());
+  doc.setTextColor(11,31,58); doc.setFont("helvetica","bold"); doc.setFontSize(15);
+  doc.text("Reporte de Decisión", 40, y); y += 14;
+  doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(120,120,120);
+  doc.text(`¿Qué hago con esta plata? · Generado el ${_hoyTxt()}`, 40, y); y += 16;
+
+  // Banda "Decisión del mes" — costo diario de no decidir
+  doc.setFillColor(11,31,58); doc.rect(40, y, 515, 60, "F");
+  doc.setTextColor(255,255,255); doc.setFontSize(8);
+  doc.text("DECISIÓN DEL MES — COSTO DIARIO DE NO DECIDIR", 54, y+18);
+  doc.setFont("helvetica","bold"); doc.setFontSize(20); doc.setTextColor(74,222,128);
+  doc.text(_money(d.costoDiario) + " / día", 54, y+44);
+  doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(200,210,225);
+  doc.text("Lo que tu excedente deja de rendir por quedar parado en vez de la mejor alternativa.", 260, y+44);
+  y += 76;
+
+  // Foto de caja
+  doc.setTextColor(11,31,58); doc.setFont("helvetica","bold"); doc.setFontSize(11);
+  doc.text("Foto de caja", 40, y); y += 6;
+  doc.autoTable({ startY: y+4, theme:"plain", styles:{fontSize:9},
+    body: [["Saldo hoy (ARS)", _money(d.saldoHoy)], ["Excedente colocable hoy", _money(d.excedente)]],
+    columnStyles:{1:{halign:"right",fontStyle:"bold"}} });
+  y = doc.lastAutoTable.finalY + 14;
+
+  // Recomendación
+  if (d.mejor) {
+    doc.setFillColor(230,244,241); doc.rect(40, y, 515, 40, "F");
+    doc.setTextColor(10,82,72); doc.setFont("helvetica","bold"); doc.setFontSize(10);
+    doc.text(`Hoy conviene: ${d.mejor.inst.nombre}`, 54, y+16);
+    doc.setFont("helvetica","normal"); doc.setFontSize(9);
+    doc.text(`Rinde ${_pctR(d.mejor.netaUSD)} anual en dólares, neto — ${_pctR(d.mejor.netaUSD - d.baseUSD)} sobre el dólar quieto.`, 54, y+30);
+    y += 52;
+  }
+
+  // Tabla de alternativas
+  doc.setTextColor(11,31,58); doc.setFont("helvetica","bold"); doc.setFontSize(11);
+  doc.text("Alternativas (tasa neta en dólares)", 40, y);
+  const body = d.alternativas.map(r => [
+    r.inst.nombre, r.inst.tipoImp === "publico" ? "Público" : "Corporativo",
+    r.inst.cat === "D" ? "—" : _pctR(r.bruta/100), _pctR(r.netaUSD),
+    r.inst.cat === "D" ? "base" : ((r.netaUSD-d.baseUSD>=0?"+":"")+_pctR(r.netaUSD-d.baseUSD)),
+  ]);
+  doc.autoTable({ startY: y+8, head:[["Instrumento","Tipo","Tasa bruta","Neta USD","vs dólar"]], body,
+    theme:"grid", headStyles:{fillColor:[11,31,58],textColor:[255,255,255]}, styles:{fontSize:8},
+    columnStyles:{2:{halign:"right"},3:{halign:"right"},4:{halign:"right"}} });
+  y = doc.lastAutoTable.finalY + 14;
+
+  // Proyecto (si hay)
+  if (d.proyecto && d.proyecto.monto > 0) {
+    if (y > 640) { doc.addPage(); y = 60; }
+    doc.setTextColor(11,31,58); doc.setFont("helvetica","bold"); doc.setFontSize(11);
+    doc.text("Proyecto propio", 40, y);
+    doc.autoTable({ startY: y+8, theme:"plain", styles:{fontSize:9},
+      body: [
+        ["Monto a invertir", _money(d.proyecto.monto)],
+        ["TIR bruta esperada", _pctR(d.proyecto.tirBruta/100)],
+        ["Ahorro impositivo (deducciones)", _money(d.proyecto.ahorro)],
+        ["TIR neta ajustada", _pctR(d.proyecto.tirAjust/100)],
+        ["Equivalente en USD", _pctR(d.proyecto.tirUSD)],
+      ], columnStyles:{1:{halign:"right",fontStyle:"bold"}} });
+    y = doc.lastAutoTable.finalY + 8;
+    const conv = d.proyecto.conviene;
+    doc.setFont("helvetica","bold"); doc.setFontSize(9);
+    doc.setTextColor(conv?46:178, conv?125:107, conv?50:0);
+    doc.text(conv ? "Financieramente conviene el proyecto (recordá las razones estratégicas)." :
+      `Financieramente conviene la alternativa financiera (${d.mejor?d.mejor.inst.nombre:""}).`, 40, y);
+    y += 16;
+  }
+
+  // Alerta impositiva
+  if (y > 660) { doc.addPage(); y = 60; }
+  doc.setFillColor(251,240,222); doc.rect(40, y, 515, 54, "F");
+  doc.setTextColor(107,66,0); doc.setFont("helvetica","bold"); doc.setFontSize(10);
+  doc.text("Alerta impositiva", 54, y+16);
+  doc.setFont("helvetica","normal"); doc.setFontSize(8);
+  const imp = d.impositivo;
+  const tramoTxt = imp.ganTramo && imp.ganTramo.aPagar != null ? `Ganancias estimado: ${_money(imp.ganTramo.aPagar)}` : "Ganancias: s/d";
+  doc.text(`Posición de IVA (último mes): ${_money(imp.ivaPos)}   ·   IIBB estimado: ${_money(imp.iibb)}`, 54, y+32);
+  doc.text(tramoTxt, 54, y+45);
+  y += 66;
+
+  doc.setTextColor(150,150,150); doc.setFontSize(7);
+  doc.text("Estimación comparativa con fines de decisión. No reemplaza el asesoramiento del contador. Alícuotas y supuestos editables en Calce.", 40, Math.min(y, 800));
+  doc.save(`Reporte_Decision_${(_emp().nombre||"empresa").replace(/\s+/g,"_")}.pdf`);
+}
+
+async function exportarReporteDecisionExcel(d) {
+  const wb = new ExcelJS.Workbook();
+  const sup = d.sup || {};
+  const setMoney = (cell, v) => { cell.value = v; cell.numFmt = XLS_MONEY; cell.alignment = { horizontal:"right" }; };
+  const setPct = (cell, v) => { cell.value = v; cell.numFmt = "0.0%"; cell.alignment = { horizontal:"right" }; };
+
+  // ── Hoja 1: Supuestos (celdas editables, referenciadas por el resto) ──
+  const wsS = wb.addWorksheet("Supuestos");
+  wsS.columns = [{width:38},{width:16}];
+  wsS.getCell("A1").value = "SUPUESTOS"; _xlsTitle(wsS.getCell("A1"));
+  const supRows = [
+    ["Devaluación esperada (%)", parseFloat(sup.devaluacion)||0],
+    ["Inflación ARS (%)", parseFloat(sup.inflacionArs)||0],
+    ["Inflación USD (%)", parseFloat(sup.inflacionUsd)||0],
+    ["Alícuota Ganancias Sociedad (%)", parseFloat(sup.alicuotaGananciasSociedad)||0],
+    ["Alícuota Ganancias Persona (%)", parseFloat(sup.alicuotaGananciasPersona)||0],
+    ["Alícuota IIBB (%)", ((state!==undefined&&state.impuestos&&state.impuestos.iibb)||0)],
+    ["Régimen (sociedad/persona)", d.regimen],
+  ];
+  let rs = 3; supRows.forEach(([k,v]) => { wsS.getCell(`A${rs}`).value=k; const c=wsS.getCell(`B${rs}`); c.value=v; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF7E6"}}; c.font={bold:true}; rs++; });
+  wsS.getCell("A11").value = "Editá estos valores y las hojas Alternativas y Proyecto se recalculan solas.";
+  wsS.getCell("A11").font = { italic:true, size:9, color:{argb:"FF787878"} };
+  const DEV="Supuestos!$B$3", ALSOC="Supuestos!$B$6", ALPER="Supuestos!$B$7", REG="Supuestos!$B$9";
+
+  // ── Hoja 2: Facturación ──
+  const wsF = wb.addWorksheet("Facturación");
+  wsF.columns=[{width:12},{width:18},{width:18},{width:14}];
+  let rf = await _xlsEncabezado(wsF, wb, "FACTURACIÓN", "Ventas netas últimos 6 meses vs mismo mes año anterior");
+  const hf = wsF.getRow(rf); ["Período","Ventas netas","Mismo mes año ant.","Var. interanual"].forEach((t,i)=>{ hf.getCell(i+1).value=t; _xlsHeader(hf.getCell(i+1)); }); rf++;
+  (d.facturacion.ult6||[]).forEach(x=>{ const row=wsF.getRow(rf); row.getCell(1).value=x.mes; setMoney(row.getCell(2),x.ventas); if(x.anterior!=null)setMoney(row.getCell(3),x.anterior); else row.getCell(3).value="s/d"; if(x.varInt!=null)setPct(row.getCell(4),x.varInt); else row.getCell(4).value="s/d"; rf++; });
+  const rtot=wsF.getRow(rf); rtot.getCell(1).value="TOTAL 6 meses"; _xlsResult(rtot.getCell(1)); setMoney(rtot.getCell(2), d.facturacion.total); _xlsResult(rtot.getCell(2));
+
+  // ── Hoja 3: Alternativas (con fórmulas vivas) ──
+  const wsA = wb.addWorksheet("Alternativas");
+  wsA.columns=[{width:30},{width:16},{width:14},{width:13},{width:13},{width:14}];
+  let ra = await _xlsEncabezado(wsA, wb, "ALTERNATIVAS", "Tasa neta en dólares — recalcula con Supuestos");
+  const ha=wsA.getRow(ra); ["Instrumento","Categoría","Tipo","Tasa bruta %","Alícuota","Neta USD"].forEach((t,i)=>{ ha.getCell(i+1).value=t; _xlsHeader(ha.getCell(i+1)); }); ra++;
+  const firstDataRow = ra;
+  (d.alternativas||[]).forEach(r=>{
+    const row=wsA.getRow(ra); const cat=r.inst.cat;
+    row.getCell(1).value=r.inst.nombre;
+    row.getCell(2).value=({A:"Pesos tasa fija",B:"Pesos con cobertura",C:"Dólares tasa fija",D:"Dólar quieto"})[cat];
+    row.getCell(3).value=r.inst.tipoImp==="publico"?"publico":"corporativo";
+    // D: tasa bruta (para B es dev+spread vía fórmula)
+    if (cat==="B") row.getCell(4).value = { formula: `${DEV}+${r.inst.spreadRef||0}` };
+    else row.getCell(4).value = r.inst.tasaRef||0;
+    // E: alícuota aplicada (0 si público, sino según régimen)
+    row.getCell(5).value = { formula: `IF(C${ra}="publico",0,IF(${REG}="persona",${ALPER},${ALSOC})/100)` };
+    row.getCell(5).numFmt="0%";
+    // F: neta USD según categoría
+    let f;
+    if (cat==="D") f = "0";
+    else if (cat==="C") f = `(D${ra}/100)*(1-E${ra})`;
+    else f = `(1+(D${ra}/100)*(1-E${ra}))/(1+${DEV}/100)-1`;
+    const cf=row.getCell(6); cf.value={formula:f}; cf.numFmt="0.0%"; cf.font={bold:true};
+    ra++;
+  });
+  const lastDataRow = ra-1;
+
+  // ── Hoja 4: Proyecto (con fórmulas vivas) ──
+  const wsP = wb.addWorksheet("Proyecto");
+  wsP.columns=[{width:34},{width:18}];
+  let rp = await _xlsEncabezado(wsP, wb, "PROYECTO PROPIO", "TIR ajustada por ahorro impositivo vs mejor alternativa");
+  const P = d.proyecto||{};
+  const put=(k,v,money)=>{ const row=wsP.getRow(rp); row.getCell(1).value=k; if(money)setMoney(row.getCell(2),v); else {row.getCell(2).value=v;} rp++; return rp-1; };
+  const rMonto=put("Monto a invertir", P.monto||0, true);
+  const rTir=put("TIR bruta esperada (%)", P.tirBruta||0);
+  put("Moneda del proyecto", P.moneda||"ARS");
+  wsP.getRow(rp).getCell(1).value="Deducciones:"; _xlsSection(wsP.getRow(rp).getCell(1)); rp++;
+  const dedStart=rp;
+  (P.deducciones||[]).forEach(ded=>{ const row=wsP.getRow(rp); row.getCell(1).value="  "+(ded.concepto||"(deducción)"); setMoney(row.getCell(2), parseFloat(ded.monto)||0); rp++; });
+  const dedEnd=rp-1;
+  const rTotDed=wsP.getRow(rp).getCell(1); rTotDed.value="Total deducciones"; _xlsSubtotal(rTotDed);
+  const cTotDed=wsP.getRow(rp).getCell(2); cTotDed.value = dedEnd>=dedStart? {formula:`SUM(B${dedStart}:B${dedEnd})`} : 0; cTotDed.numFmt=XLS_MONEY; _xlsSubtotal(cTotDed); const rTotDedNum=rp; rp++;
+  const rAlic=rp; wsP.getRow(rp).getCell(1).value="Alícuota Ganancias aplicada"; const cAlic=wsP.getRow(rp).getCell(2); cAlic.value={formula:`IF(${REG}="persona",${ALPER},${ALSOC})/100`}; cAlic.numFmt="0%"; rp++;
+  const rAhorro=rp; wsP.getRow(rp).getCell(1).value="Ahorro impositivo"; const cAh=wsP.getRow(rp).getCell(2); cAh.value={formula:`B${rTotDedNum}*B${rAlic}`}; cAh.numFmt=XLS_MONEY; rp++;
+  const rTirAj=rp; wsP.getRow(rp).getCell(1).value="TIR neta ajustada"; const cTa=wsP.getRow(rp).getCell(2); cTa.value={formula:`(B${rTir}+IF(B${rMonto}>0,B${rAhorro}/B${rMonto}*100,0))/100`}; cTa.numFmt="0.0%"; rp++;
+  const rTirUsd=rp; wsP.getRow(rp).getCell(1).value="Equivalente en USD"; const cTu=wsP.getRow(rp).getCell(2); cTu.value={formula:`IF("${P.moneda||"ARS"}"="USD",B${rTirAj},(1+B${rTirAj})/(1+${DEV}/100)-1)`}; cTu.numFmt="0.0%"; cTu.font={bold:true}; rp++;
+  const rMejor=rp; wsP.getRow(rp).getCell(1).value="Mejor alternativa financiera (USD)"; const cM=wsP.getRow(rp).getCell(2); cM.value={formula:`MAX(Alternativas!F${firstDataRow}:F${lastDataRow})`}; cM.numFmt="0.0%"; rp++;
+  const rConv=rp; wsP.getRow(rp).getCell(1).value="¿Conviene el proyecto?"; const cC=wsP.getRow(rp).getCell(2); cC.value={formula:`IF(B${rTirUsd}>B${rMejor},"Sí (financieramente)","No — conviene la alternativa")`}; _xlsResult(wsP.getRow(rp).getCell(1)); _xlsResult(cC); rp+=2;
+  wsP.getRow(rp).getCell(1).value="La comparación es financiera pura; no capta razones estratégicas o de crecimiento del negocio.";
+  wsP.getRow(rp).getCell(1).font={italic:true,size:9,color:{argb:"FF787878"}};
+
+  // ── Hoja 5: Resumen Ejecutivo ──
+  const wsR = wb.addWorksheet("Resumen Ejecutivo");
+  wsR.columns=[{width:38},{width:22}];
+  let rr = await _xlsEncabezado(wsR, wb, "RESUMEN EJECUTIVO", "Decisión del mes");
+  const band=wsR.getRow(rr); band.getCell(1).value="COSTO DIARIO DE NO DECIDIR"; wsR.mergeCells(rr,1,rr,1);
+  band.getCell(1).font={bold:true,color:{argb:XLS_WHITE}}; band.getCell(1).fill={type:"pattern",pattern:"solid",fgColor:{argb:XLS_NAVY}};
+  const cCost=band.getCell(2); setMoney(cCost, d.costoDiario); cCost.font={bold:true,color:{argb:"FF2E7D32"},size:13}; cCost.fill={type:"pattern",pattern:"solid",fgColor:{argb:XLS_NAVY}}; rr+=2;
+  const kpi=(k,v,money)=>{ const row=wsR.getRow(rr); row.getCell(1).value=k; if(money)setMoney(row.getCell(2),v); else row.getCell(2).value=v; rr++; };
+  kpi("Saldo hoy (ARS)", d.saldoHoy, true);
+  kpi("Excedente colocable", d.excedente, true);
+  kpi("Facturación últimos 6 meses", d.facturacion.total, true);
+  if (d.mejor) { const row=wsR.getRow(rr); row.getCell(1).value="Mejor alternativa hoy"; row.getCell(2).value=`${d.mejor.inst.nombre} (${_pctR(d.mejor.netaUSD)} USD)`; rr++; }
+  if (d.proyecto && d.proyecto.monto>0) { const row=wsR.getRow(rr); row.getCell(1).value="Proyecto propio (USD equiv.)"; setPct(row.getCell(2), d.proyecto.tirUSD); rr++; }
+
+  // ── Hoja 6: Impositivo ──
+  const wsI = wb.addWorksheet("Impositivo");
+  wsI.columns=[{width:38},{width:20}];
+  let ri = await _xlsEncabezado(wsI, wb, "IMPOSITIVO", "Estimación del último período");
+  const imp=d.impositivo||{};
+  const rowI=(k,v,money)=>{ const row=wsI.getRow(ri); row.getCell(1).value=k; if(money)setMoney(row.getCell(2),v); else row.getCell(2).value=v; ri++; };
+  rowI("Posición de IVA (último mes)", imp.ivaPos||0, true);
+  rowI("Ingresos Brutos (IIBB) estimado", imp.iibb||0, true);
+  rowI("Base: ventas del último mes", imp.ventasUltMes||0, true);
+  if (imp.ganTramo && imp.ganTramo.aPagar!=null) rowI("Ganancias estimado (a pagar)", imp.ganTramo.aPagar, true);
+  ri++;
+  wsI.getRow(ri).getCell(1).value="Estimación orientativa. Validar con el contador el tratamiento de cada instrumento y la posición fiscal.";
+  wsI.getRow(ri).getCell(1).font={italic:true,size:9,color:{argb:"FF787878"}};
+
+  await _xlsSave(wb, `Reporte_Decision_${(_emp().nombre||"empresa").replace(/\s+/g,"_")}.xlsx`);
+}

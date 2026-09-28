@@ -29,6 +29,10 @@ const state = {
   empresa: { nombre: "", cuit: "", provincia: "", modo: "completo" },
   prefs: { moneda: "ARS", formatoFecha: "dd/mm/aa", colchon: 200000, horizonte: 90 },
   impuestos: { iva: 21, iibb: 3 },
+  // Supuestos macro para el motor de costo del dinero (todo % anual, editable).
+  supuestos: { inflacionArs: 80, inflacionUsd: 3, devaluacion: 60, alicuotaGananciasSociedad: 35, alicuotaGananciasPersona: 35 },
+  // Proyecto propio a evaluar contra las alternativas financieras.
+  proyecto: { monto: 0, tirBruta: 0, moneda: "ARS", deducciones: [] },
   ganAjustes: [], // ajustes cargables para estimar Ganancias (amortizaciones, quebrantos, etc.)
   result: null,
   cfAccount: "",
@@ -228,6 +232,8 @@ function saveState() {
         empresa: state.empresa,
         prefs: state.prefs,
         impuestos: state.impuestos,
+        supuestos: state.supuestos,
+        proyecto: state.proyecto,
         _acctSeq,
       };
       localStorage.setItem(STORE_KEY, JSON.stringify(snapshot));
@@ -253,6 +259,8 @@ function loadState() {
     if (s.empresa) state.empresa = s.empresa;
     if (s.prefs) state.prefs = s.prefs;
     if (s.impuestos) state.impuestos = s.impuestos;
+    if (s.supuestos) state.supuestos = { ...state.supuestos, ...s.supuestos };
+    if (s.proyecto) state.proyecto = { ...state.proyecto, ...s.proyecto };
     if (s._acctSeq) _acctSeq = s._acctSeq;
     return true;
   } catch (e) { console.warn("No se pudo cargar:", e); return false; }
@@ -1902,7 +1910,7 @@ function renderRendimiento() {
     <div class="rend-msg">◆ Este es dinero que, sin colocarlo, habría quedado parado en la cuenta sin generar nada.</div>
 
     <div class="table-card" style="margin-top:18px">
-      <div class="chart-head"><h2>Evolución del rendimiento acumulado</h2></div>
+      <div class="chart-head"><h2>Ganancia de inversiones por mes</h2></div>
       <div id="rend-chart"></div>
     </div>
 
@@ -1978,40 +1986,77 @@ function renderRendChart(invs, from, to) {
   const host = $("#rend-chart");
   if (!host) return;
   if (!invs.length) { host.innerHTML = `<p class="cf-empty" style="padding:20px">Sin datos para graficar.</p>`; return; }
-  // Rango del gráfico: desde la colocación más antigua (o 'from') hasta hoy/'to'
   const hoy = new Date().toISOString().slice(0,10);
   const finISO = to < hoy ? to : hoy;
   let iniISO = from;
   invs.forEach(inv => { if (inv.fechaColocacion && inv.fechaColocacion < iniISO) iniISO = inv.fechaColocacion; });
-  // Limitar a un rango razonable
-  const ini = new Date(iniISO+"T00:00:00"), fin = new Date(finISO+"T00:00:00");
-  const totalDias = Math.max(1, Math.round((fin-ini)/86400000));
-  const step = totalDias > 180 ? Math.ceil(totalDias/180) : 1;
-  const pts = [];
-  for (let d = 0; d <= totalDias; d += step) {
-    const fecha = new Date(ini); fecha.setDate(fecha.getDate()+d);
-    const fISO = fecha.toISOString().slice(0,10);
-    const acum = invs.reduce((s,inv) => s + rendimientoDevengado(inv, fISO), 0);
-    pts.push({ x: d, y: acum });
+
+  const acumAt = (fISO) => invs.reduce((s,inv) => s + rendimientoDevengado(inv, fISO), 0);
+  const finDeMes = (yy,mm) => { const last = new Date(yy, mm, 0).getDate(); return `${yy}-${String(mm).padStart(2,"0")}-${String(last).padStart(2,"0")}`; };
+
+  const startY = +iniISO.slice(0,4), startM = +iniISO.slice(5,7);
+  const endY = +finISO.slice(0,4), endM = +finISO.slice(5,7);
+  // Acumulado al día anterior al inicio (para la ganancia del primer mes)
+  const dAnt = new Date(iniISO+"T00:00:00"); dAnt.setDate(dAnt.getDate()-1);
+  let prevAcum = acumAt(dAnt.toISOString().slice(0,10));
+
+  const filas = [];
+  let y = startY, m = startM;
+  while ((y < endY || (y===endY && m<=endM)) && filas.length < 36) {
+    let eom = finDeMes(y, m);
+    if (eom > finISO) eom = finISO;
+    const acum = acumAt(eom);
+    const gain = Math.max(0, acum - prevAcum);
+    const label = new Date(y, m-1, 1).toLocaleDateString("es-AR",{month:"short"}) + " " + String(y).slice(2);
+    filas.push({ y: label, gain, acum });
+    prevAcum = acum;
+    m++; if (m>12){m=1;y++;}
   }
-  if (pts.length < 2) { host.innerHTML = `<p class="cf-empty" style="padding:20px">Poco historial para graficar todavía.</p>`; return; }
+  if (!filas.length) { host.innerHTML = `<p class="cf-empty" style="padding:20px">Poco historial para graficar todavía.</p>`; return; }
+  dibujarRendChart(host, filas);
+}
 
-  const W=880, H=240, P={t:16,r:16,b:26,l:70};
+// Línea interactiva de ganancia de inversiones mes a mes (con tooltip).
+function dibujarRendChart(host, filas) {
+  const W=880, H=250, P={t:20,r:18,b:40,l:74};
   const iw=W-P.l-P.r, ih=H-P.t-P.b;
-  const ymax = Math.max(...pts.map(p=>p.y), 1);
-  const X=(i)=>P.l+(i/(pts.length-1))*iw;
-  const Y=(v)=>P.t+ih-(v/ymax)*ih;
-  const line = pts.map((p,i)=>`${X(i).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ");
-  const area = `${P.l},${(P.t+ih).toFixed(1)} ${line} ${(P.l+iw).toFixed(1)},${(P.t+ih).toFixed(1)}`;
-
-  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="dash-svg">
-    <polygon points="${area}" fill="rgba(46,125,50,.10)"/>
-    <polyline points="${line}" fill="none" stroke="#2E7D32" stroke-width="2.5"/>
-    <text x="6" y="${Y(ymax).toFixed(1)+4}" fill="#94A3B8" font-size="10">${money(ymax)}</text>
-    <text x="6" y="${(P.t+ih).toFixed(1)}" fill="#94A3B8" font-size="10">$0</text>
-    <text x="${P.l}" y="${H-6}" fill="#94A3B8" font-size="10">${fmtDateShort(iniISO)}</text>
-    <text x="${(P.l+iw).toFixed(1)}" y="${H-6}" fill="#94A3B8" font-size="10" text-anchor="end">${fmtDateShort(finISO)}</text>
-  </svg>`;
+  const n = filas.length;
+  const maxV = Math.max(...filas.map(f=>f.gain), 1);
+  const X = (i) => n===1 ? P.l+iw/2 : P.l + (i/(n-1))*iw;
+  const Y = (v) => P.t + ih - (v/maxV)*ih;
+  const linePts = filas.map((f,i)=>`${X(i).toFixed(1)},${Y(f.gain).toFixed(1)}`).join(" ");
+  const area = `${P.l},${(P.t+ih).toFixed(1)} ${linePts} ${(P.l+iw).toFixed(1)},${(P.t+ih).toFixed(1)}`;
+  const dots = filas.map((f,i)=>`<circle cx="${X(i).toFixed(1)}" cy="${Y(f.gain).toFixed(1)}" r="3" fill="#2E7D32"/>`).join("");
+  let grid=""; for (let g=0; g<=3; g++){ const v=maxV*g/3, yy=Y(v); grid+=`<line x1="${P.l}" y1="${yy.toFixed(1)}" x2="${W-P.r}" y2="${yy.toFixed(1)}" stroke="#EDF1F6"/><text x="${P.l-6}" y="${(yy+3).toFixed(1)}" fill="#94A3B8" font-size="10" text-anchor="end">${money(v)}</text>`; }
+  const xlabels = filas.map((f,i)=>`<text x="${X(i).toFixed(1)}" y="${H-16}" fill="#64748B" font-size="10" text-anchor="middle">${f.y}</text>`).join("");
+  host.innerHTML = `
+    <div class="evol-chart-box">
+      <svg viewBox="0 0 ${W} ${H}" class="dash-svg" id="rend-svg" preserveAspectRatio="none">
+        ${grid}
+        <polygon points="${area}" fill="rgba(46,125,50,.10)"/>
+        <line id="rend-guide" x1="0" y1="${P.t}" x2="0" y2="${P.t+ih}" stroke="#94A3B8" stroke-dasharray="3 3" opacity="0"/>
+        <polyline points="${linePts}" fill="none" stroke="#2E7D32" stroke-width="2.5"/>
+        ${dots}
+        <circle id="rend-hp" r="5" fill="#2E7D32" opacity="0"/>
+        ${xlabels}
+        <rect id="rend-hit" x="${P.l}" y="${P.t}" width="${iw}" height="${ih}" fill="transparent" style="cursor:crosshair"/>
+      </svg>
+      <div id="rend-tip" class="evol-tip" style="display:none"></div>
+    </div>`;
+  const svg=$("#rend-svg"), hit=$("#rend-hit"), tip=$("#rend-tip"), guide=$("#rend-guide"), hp=$("#rend-hp");
+  if (!svg || !hit) return;
+  const move=(ev)=>{
+    const rect=svg.getBoundingClientRect();
+    const px=(ev.clientX-rect.left)/rect.width*W;
+    let i=Math.round((px-P.l)/(iw/(n>1?n-1:1))); i=Math.max(0,Math.min(n-1,i));
+    const f=filas[i], gx=X(i);
+    guide.setAttribute("x1",gx); guide.setAttribute("x2",gx); guide.setAttribute("opacity","1");
+    hp.setAttribute("cx",gx); hp.setAttribute("cy",Y(f.gain)); hp.setAttribute("opacity","1");
+    tip.style.display="block"; tip.style.left=((gx/W)*100)+"%";
+    tip.innerHTML=`<b>${f.y}</b><span class="et-r">Ganancia del mes: ${money(f.gain)}</span><span class="et-n">Acumulado: ${money(f.acum)}</span>`;
+  };
+  const leave=()=>{ tip.style.display="none"; guide.setAttribute("opacity","0"); hp.setAttribute("opacity","0"); };
+  hit.addEventListener("mousemove",move); hit.addEventListener("mouseleave",leave);
 }
 
 function exportarRendimiento(detalle, label, to) {
@@ -2042,6 +2087,10 @@ async function renderExcedente() {
 
     <div class="ctrl-card" id="optimizar-card" style="max-width:720px"></div>
 
+    <div id="exc-costo" style="margin-top:20px"></div>
+
+    <div id="exc-proyecto" style="margin-top:20px"></div>
+
     <div id="exc-asesoria" style="margin-top:20px"></div>
 
     <div id="exc-fondos" style="margin-top:20px"></div>
@@ -2049,6 +2098,8 @@ async function renderExcedente() {
     ${yaColocado > 0 ? `<p class="exc-note" style="margin-top:16px">Ya tenés ${money(yaColocado)} colocados en inversiones activas. <a href="#" id="exc-ver-cartera">Ver mi cartera →</a></p>` : ""}`;
 
   renderOptimizar();
+  renderCostoDinero();
+  renderProyectoInversion();
   renderAsesoriaExcedente();
   renderOpcionesExcedente();
   const link = $("#exc-ver-cartera");
@@ -2259,6 +2310,199 @@ function abrirColocacion(tipo, tna, nombre) {
   if (nombre && $("#i-label")) $("#i-label").value = nombre;
   if (tna != null && $("#i-rend")) $("#i-rend").value = tna;
   updateInvPreview();
+}
+
+// ── Motor "¿Dónde conviene tener la plata?" (costo del dinero) ──
+let costoRegimen = null;
+async function renderCostoDinero() {
+  const host = $("#exc-costo");
+  if (!host || typeof analizarCostoDinero !== "function") { if (host) host.innerHTML = ""; return; }
+  const sup = state.supuestos || {};
+  if (costoRegimen === null) costoRegimen = (state.empresa && state.empresa.regimenGan === "persona") ? "persona" : "sociedad";
+  host.innerHTML = `<div class="inv-placeholder">Analizando alternativas…</div>`;
+
+  const safeJson = async (u) => { try { return await (await fetch(u)).json(); } catch (e) { return null; } };
+  const [mm, pf, cau] = await Promise.all([
+    state.fciData ? Promise.resolve(state.fciData) : safeJson("/api/fci/money-market"),
+    safeJson("/api/tasas/plazo-fijo"),
+    safeJson("/api/tasas/caucion"),
+  ]);
+  if (mm) state.fciData = mm;
+  const live = {
+    fci: (mm && mm.funds && mm.funds.length) ? Math.max(...mm.funds.map(f => f.tna || 0)) : null,
+    pf: pf ? pf.best_tna : null,
+    caucion: cau ? cau.tna_1d : null,
+  };
+  const rows = analizarCostoDinero(sup, costoRegimen, live);
+  const best = rows[0];
+  const dolar = rows.find(r => r.inst.cat === "D");
+  const baseUSD = dolar ? dolar.netaUSD : 0;
+  const pct = (v) => (v * 100).toFixed(1) + "%";
+  const clsN = (v) => v > 0.0005 ? "pos" : (v < -0.0005 ? "neg" : "");
+
+  const banner = (best.inst.cat === "D")
+    ? `<div class="cd-banner base"><span>◆</span><div><b>Hoy conviene quedarse en dólar quieto.</b> Con estos supuestos, ninguna alternativa lo supera en términos netos. Es la opción por defecto.</div></div>`
+    : `<div class="cd-banner win"><span>◆</span><div><b>Hoy conviene: ${h(best.inst.nombre)}.</b> Rinde <b>${pct(best.netaUSD)}</b> anual en dólares, neto de impuestos — ${pct(best.netaUSD - baseUSD)} por encima de quedarte en dólar quieto.</div></div>`;
+
+  host.innerHTML = `
+    <div class="cd-card">
+      <div class="cd-head">
+        <div><h3>¿Dónde conviene tener la plata?</h3>
+        <p>Cada alternativa llevada a tasa neta anual en dólares, comparable, con el dólar quieto como base. Partimos de que la plata está en pesos.</p></div>
+        <div class="cd-reg"><span>Régimen:</span>
+          <button class="cd-reg-btn ${costoRegimen==="sociedad"?"active":""}" data-reg="sociedad">Sociedad</button>
+          <button class="cd-reg-btn ${costoRegimen==="persona"?"active":""}" data-reg="persona">Persona</button>
+        </div>
+      </div>
+      <div class="cd-reportbtns">
+        <button class="btn-primary sm" id="cd-rep-pdf">↓ Reporte de Decisión (PDF)</button>
+        <button class="btn-ghost sm" id="cd-rep-xlsx">↓ Excel interactivo</button>
+      </div>
+      ${banner}
+      <div class="cf-table-scroll"><table class="cf-table cd-table">
+        <thead><tr><th>Instrumento</th><th>Categoría</th><th style="text-align:right">Tasa bruta</th><th style="text-align:right">Neta en USD</th><th style="text-align:right">vs dólar</th></tr></thead>
+        <tbody>${rows.map((r,i) => `<tr class="${(i===0 && r.inst.cat!=="D") ? "cd-best" : ""} ${r.inst.cat==="D" ? "cd-base-row" : ""}">
+          <td><b>${h(r.inst.nombre)}</b> ${r.inst.tipoImp==="publico"?'<span class="cd-tag pub">público</span>':'<span class="cd-tag corp">corporativo</span>'}</td>
+          <td>${COSTO_CAT_LABEL[r.inst.cat]}</td>
+          <td class="mono" style="text-align:right">${r.inst.cat==="D" ? "—" : (r.inst.moneda==="USD" ? pct(r.bruta/100)+" USD" : pct(r.bruta/100)+" ARS")}</td>
+          <td class="mono ${clsN(r.netaUSD)}" style="text-align:right"><b>${pct(r.netaUSD)}</b></td>
+          <td class="mono ${clsN(r.netaUSD-baseUSD)}" style="text-align:right">${r.inst.cat==="D" ? "base" : (r.netaUSD-baseUSD>=0?"+":"")+pct(r.netaUSD-baseUSD)}</td>
+        </tr>`).join("")}</tbody>
+      </table></div>
+      <p class="cd-note">Tasas de referencia (FCI/PF/caución en vivo; el resto editable en el catálogo). Neteo: títulos públicos exentos, corporativos a la alícuota del régimen. Devaluación esperada ${pct((parseFloat(sup.devaluacion)||0)/100)} anual (editable en Supuestos). Estimación comparativa, no asesoramiento — validá lo impositivo con tu contador.</p>
+    </div>`;
+
+  $$(".cd-reg-btn").forEach(b => b.onclick = () => { costoRegimen = b.dataset.reg; renderCostoDinero(); });
+  const repPdf = $("#cd-rep-pdf");
+  if (repPdf) repPdf.onclick = async () => { repPdf.disabled=true; repPdf.textContent="Generando…"; try { const d = await datosReporteDecision(); exportarReporteDecisionPDF(d); } catch(e){ console.warn(e); alert("No se pudo generar el PDF."); } repPdf.disabled=false; repPdf.textContent="↓ Reporte de Decisión (PDF)"; };
+  const repXls = $("#cd-rep-xlsx");
+  if (repXls) repXls.onclick = async () => { repXls.disabled=true; repXls.textContent="Generando…"; try { const d = await datosReporteDecision(); await exportarReporteDecisionExcel(d); } catch(e){ console.warn(e); alert("No se pudo generar el Excel."); } repXls.disabled=false; repXls.textContent="↓ Excel interactivo"; };
+}
+
+// ── Recolector de datos para el Reporte de Decisión ──────
+async function datosReporteDecision() {
+  const sup = state.supuestos || {};
+  const regimen = costoRegimen || ((state.empresa && state.empresa.regimenGan === "persona") ? "persona" : "sociedad");
+  const safeJson = async (u) => { try { return await (await fetch(u)).json(); } catch (e) { return null; } };
+  const [mm, pf, cau] = await Promise.all([
+    state.fciData ? Promise.resolve(state.fciData) : safeJson("/api/fci/money-market"),
+    safeJson("/api/tasas/plazo-fijo"), safeJson("/api/tasas/caucion"),
+  ]);
+  if (mm) state.fciData = mm;
+  const live = { fci:(mm&&mm.funds&&mm.funds.length)?Math.max(...mm.funds.map(f=>f.tna||0)):null, pf:pf?pf.best_tna:null, caucion:cau?cau.tna_1d:null };
+  const alternativas = (typeof analizarCostoDinero==="function") ? analizarCostoDinero(sup, regimen, live) : [];
+  const mejor = alternativas.find(r=>r.inst.cat!=="D") || null;
+  const dolar = alternativas.find(r=>r.inst.cat==="D");
+  const baseUSD = dolar ? dolar.netaUSD : 0;
+
+  const cuentas = state.accounts.filter(a=>a.moneda==="ARS" && a.tipo!=="efectivo" && a.tipo!=="comitente");
+  const saldoHoy = state.accounts.filter(a=>a.moneda==="ARS").reduce((s,a)=>s+saldoCuentaAFecha(a),0);
+  const excedente = cuentas.reduce((s,a)=>s+Math.max(0, saldoCuentaAFecha(a)-pagosDeHoy(a.id)),0);
+  const costoDiario = mejor ? excedente*(mejor.netaUSD-baseUSD)/365 : 0;
+
+  const ventas = (state.comprobantes||[]).filter(c=>c.tipo==="cobrar");
+  const meses={}; ventas.forEach(c=>{ const m=(c.emision||"").slice(0,7); if(!/^\d{4}-\d{2}$/.test(m))return; meses[m]=(meses[m]||0)+((c.neto||0)+(c.noGravado||0)+(c.exento||0)); });
+  const ordM = Object.keys(meses).sort();
+  const ult6 = ordM.slice(-6).map(m=>{ const [y,mo]=m.split("-"); const prev=`${+y-1}-${mo}`; return { mes:m, ventas:meses[m], anterior:meses[prev]||null, varInt:(meses[prev]?(meses[m]-meses[prev])/meses[prev]:null) }; });
+  const totalFact6 = ult6.reduce((s,x)=>s+x.ventas,0);
+
+  const p = state.proyecto||{monto:0,tirBruta:0,moneda:"ARS",deducciones:[]};
+  const alic = (regimen==="persona"?(parseFloat(sup.alicuotaGananciasPersona)||0):(parseFloat(sup.alicuotaGananciasSociedad)||0))/100;
+  const dev = (parseFloat(sup.devaluacion)||0)/100;
+  const totalDed = (p.deducciones||[]).reduce((s,d)=>s+(parseFloat(d.monto)||0),0);
+  const ahorro = totalDed*alic;
+  const montoP = parseFloat(p.monto)||0;
+  const tirAjust = (parseFloat(p.tirBruta)||0) + (montoP>0 ? (ahorro/montoP)*100 : 0);
+  const tirUSD = p.moneda==="USD" ? tirAjust/100 : ((1+tirAjust/100)/(1+dev)-1);
+  const proyecto = { monto:montoP, tirBruta:parseFloat(p.tirBruta)||0, moneda:p.moneda, deducciones:p.deducciones||[], totalDed, ahorro, tirAjust, tirUSD, conviene: mejor?tirUSD>mejor.netaUSD:null };
+
+  const ivaMeses={}; (state.comprobantes||[]).forEach(c=>{ const m=(c.emision||"").slice(0,7); if(!/^\d{4}-\d{2}$/.test(m))return; if(!ivaMeses[m])ivaMeses[m]={d:0,cr:0}; if(c.tipo==="cobrar")ivaMeses[m].d+=(c.iva||0); else if(c.tipo==="pagar"){ const comp=c.ivaComputable===undefined?true:c.ivaComputable===true; if(comp)ivaMeses[m].cr+=(c.iva||0); } });
+  const ivaKeys=Object.keys(ivaMeses).sort(); const ivaUlt=ivaKeys.length?ivaMeses[ivaKeys[ivaKeys.length-1]]:{d:0,cr:0};
+  const ventasUltMes = ordM.length ? meses[ordM[ordM.length-1]] : 0;
+  const iibb = ventasUltMes * (((state.impuestos&&state.impuestos.iibb)||0)/100);
+  let ganTramo=null; try { if (typeof calcularFiscal==="function" && typeof estimarGanancias==="function") { const f=calcularFiscal(); ganTramo=estimarGanancias(f); } } catch(e){}
+
+  return { sup, regimen, alternativas, mejor, dolar, baseUSD, saldoHoy, excedente, costoDiario,
+    facturacion:{ ult6, total: totalFact6 }, proyecto, impositivo:{ ivaPos: ivaUlt.d-ivaUlt.cr, iibb, ventasUltMes, ganTramo } };
+}
+
+// ── Módulo de Proyecto propio (TIR + deducciones) ────────
+function renderProyectoInversion() {
+  const host = $("#exc-proyecto");
+  if (!host) return;
+  const p = state.proyecto = state.proyecto || { monto:0, tirBruta:0, moneda:"ARS", deducciones:[] };
+  if (!Array.isArray(p.deducciones)) p.deducciones = [];
+  const sup = state.supuestos || {};
+  const regimen = costoRegimen || ((state.empresa && state.empresa.regimenGan === "persona") ? "persona" : "sociedad");
+  const money0 = (v) => moneyC(v, "ARS");
+
+  const dedRows = p.deducciones.map((d,i) => `
+    <div class="proy-ded-row" data-i="${i}">
+      <input type="text" class="proy-ded-con" placeholder="Concepto (ej. amortización, puesta en marcha)" value="${h(d.concepto||"")}">
+      <div class="money-input"><em>$</em><input type="number" class="proy-ded-monto" value="${d.monto||0}" step="10000"></div>
+      <button class="proy-ded-del" title="Quitar">×</button>
+    </div>`).join("");
+
+  host.innerHTML = `
+    <div class="cd-card">
+      <div class="cd-head"><div><h3>¿Y si invierto en mi propio proyecto?</h3>
+        <p>Cargá el proyecto y lo comparamos, en tasa neta, contra la mejor alternativa financiera — sumando el ahorro impositivo que generan sus deducciones sobre Ganancias.</p></div></div>
+      <div class="proy-inv-grid">
+        <label class="field"><span>Monto a invertir</span>
+          <div class="money-input"><em>$</em><input type="number" id="proy-monto" value="${p.monto||0}" step="100000"></div></label>
+        <label class="field"><span>TIR bruta esperada</span>
+          <div class="money-input"><input type="number" id="proy-tir" value="${p.tirBruta||0}" step="1"><em>%</em></div></label>
+        <label class="field"><span>Moneda del proyecto</span>
+          <select id="proy-moneda"><option value="ARS" ${p.moneda!=="USD"?"selected":""}>Pesos</option><option value="USD" ${p.moneda==="USD"?"selected":""}>Dólares</option></select></label>
+      </div>
+      <div class="cfg-sec-sub" style="margin-top:14px">Deducciones que el proyecto genera sobre Ganancias</div>
+      <div id="proy-deds">${dedRows || `<p class="cf-empty" style="padding:6px 0">Agregá amortizaciones, gastos de puesta en marcha, etc.</p>`}</div>
+      <button class="btn-ghost sm" id="proy-add-ded" style="margin-top:8px">+ Agregar deducción</button>
+      <div id="proy-inv-result" style="margin-top:16px"></div>
+    </div>`;
+
+  const recompute = () => {
+    const res = $("#proy-inv-result"); if (!res) return;
+    const alic = (regimen==="persona" ? (parseFloat(sup.alicuotaGananciasPersona)||0) : (parseFloat(sup.alicuotaGananciasSociedad)||0))/100;
+    const dev = (parseFloat(sup.devaluacion)||0)/100;
+    const monto = parseFloat(p.monto)||0;
+    const totalDed = p.deducciones.reduce((s,d)=>s+(parseFloat(d.monto)||0),0);
+    const ahorro = totalDed*alic;
+    const tirBruta = parseFloat(p.tirBruta)||0;
+    const tirAjust = tirBruta + (monto>0 ? (ahorro/monto)*100 : 0);
+    const tirUSD = p.moneda==="USD" ? tirAjust/100 : ((1+tirAjust/100)/(1+dev)-1);
+    let mejor = null;
+    if (typeof analizarCostoDinero === "function") {
+      const live = { fci:(state.fciData&&state.fciData.funds&&state.fciData.funds.length)?Math.max(...state.fciData.funds.map(f=>f.tna||0)):null };
+      const rows = analizarCostoDinero(sup, regimen, live).filter(r=>r.inst.cat!=="D");
+      mejor = rows[0];
+    }
+    const conviene = mejor ? tirUSD > mejor.netaUSD : true;
+    const pct=(v)=>(v*100).toFixed(1)+"%"; const pctp=(v)=>v.toFixed(1)+"%";
+    res.innerHTML = `
+      <div class="proy-inv-kpis">
+        <div class="proy-inv-kpi"><small>Ahorro impositivo</small><b>${money0(ahorro)}</b><span>${pctp(alic*100)} sobre ${money0(totalDed)} de deducciones</span></div>
+        <div class="proy-inv-kpi"><small>TIR neta ajustada</small><b>${pctp(tirAjust)}</b><span>en ${p.moneda==="USD"?"dólares":"pesos"}</span></div>
+        <div class="proy-inv-kpi hero"><small>Equivalente en USD</small><b>${pct(tirUSD)}</b><span>comparable con las alternativas</span></div>
+      </div>
+      ${mejor ? `<div class="proy-inv-conc ${conviene?"win":"lose"}"><span>${conviene?"✓":"◆"}</span>
+        <div><b>${conviene ? "Financieramente, conviene el proyecto." : `Financieramente, conviene ${h(mejor.inst.nombre)}.`}</b>
+        <span>El proyecto rinde <b>${pct(tirUSD)}</b> en USD vs <b>${pct(mejor.netaUSD)}</b> de la mejor alternativa (${h(mejor.inst.nombre)}). Ojo: hay razones estratégicas o de crecimiento para invertir en el negocio que este número no captura.</span></div>
+      </div>` : ""}`;
+  };
+  recompute();
+
+  const bind = (id, key, num) => { const el=$(id); if(el) el.oninput = () => { p[key] = num ? (parseFloat(el.value)||0) : el.value; saveState(); recompute(); }; };
+  bind("#proy-monto","monto",true);
+  bind("#proy-tir","tirBruta",true);
+  const mon = $("#proy-moneda"); if (mon) mon.onchange = () => { p.moneda = mon.value; saveState(); recompute(); };
+  const addBtn = $("#proy-add-ded"); if (addBtn) addBtn.onclick = () => { p.deducciones.push({concepto:"",monto:0}); saveState(); renderProyectoInversion(); };
+  $$(".proy-ded-row").forEach(row => {
+    const i = +row.dataset.i;
+    const con = row.querySelector(".proy-ded-con"); if (con) con.oninput = () => { p.deducciones[i].concepto = con.value; saveState(); };
+    const mo = row.querySelector(".proy-ded-monto"); if (mo) mo.oninput = () => { p.deducciones[i].monto = parseFloat(mo.value)||0; saveState(); recompute(); };
+    const del = row.querySelector(".proy-ded-del"); if (del) del.onclick = () => { p.deducciones.splice(i,1); saveState(); renderProyectoInversion(); };
+  });
 }
 
 // ── Dólar: comprar / vender divisas ──────────────────────
@@ -5951,6 +6195,7 @@ function renderConfig() {
     { v: "cuentas", label: "Cuentas", icono: "🏦" },
     { v: "empresa", label: "Empresa", icono: "🏢" },
     { v: "impuestos", label: "Parámetros impositivos", icono: "📊" },
+    { v: "supuestos", label: "Supuestos", icono: "📈" },
     { v: "preferencias", label: "Preferencias", icono: "⚙️" },
     { v: "cuenta", label: "Cuenta y nube", icono: "☁️" },
     { v: "datos", label: "Datos y respaldo", icono: "💾" },
@@ -6024,6 +6269,33 @@ function renderConfig() {
       </div>
       <p class="cfg-hint" style="margin-top:10px">Los que dejes tildados aparecen en el calendario de vencimientos y en el estimador.</p>
       <button class="btn-primary sm cfg-save-btn" id="cfg-save-imp">Guardar cambios</button>`;
+  } else if (sec === "supuestos") {
+    const su = state.supuestos || {};
+    const g = (k, def) => (su[k] !== undefined ? su[k] : def);
+    panel = `
+      <div class="cfg-sec-head"><h3>Supuestos</h3></div>
+      <p class="cfg-hint">Los supuestos macro y las alícuotas que usa el motor de "¿Dónde conviene tener la plata?" para llevar todo a tasa neta comparable. Son estimaciones editables — ajustalas a tu escenario y validá las impositivas con tu contador.</p>
+      <div class="cfg-sec-sub">Mercado (todo % anual)</div>
+      <div class="cfg-grid">
+        <label class="field"><span>Inflación en pesos esperada</span>
+          <div class="money-input" style="--sfx:'%'"><input type="number" id="su-infars" value="${g("inflacionArs",80)}" step="1"><em>%</em></div></label>
+        <label class="field"><span>Inflación en dólares esperada</span>
+          <div class="money-input"><input type="number" id="su-infusd" value="${g("inflacionUsd",3)}" step="0.5"><em>%</em></div></label>
+        <label class="field"><span>Devaluación esperada (dólar oficial)</span>
+          <div class="money-input"><input type="number" id="su-devalua" value="${g("devaluacion",60)}" step="1"><em>%</em></div></label>
+      </div>
+      <div class="cfg-sec-sub" style="margin-top:14px">Impositivo</div>
+      <div class="cfg-grid">
+        <label class="field"><span>Alícuota Ganancias — Sociedad</span>
+          <div class="money-input"><input type="number" id="su-gansoc" value="${g("alicuotaGananciasSociedad",35)}" step="1"><em>%</em></div>
+          <small>Se aplica a instrumentos corporativos (ON, FCI). Los títulos públicos suelen estar exentos.</small></label>
+        <label class="field"><span>Alícuota Ganancias — Persona humana</span>
+          <div class="money-input"><input type="number" id="su-ganper" value="${g("alicuotaGananciasPersona",35)}" step="1"><em>%</em></div></label>
+        <label class="field"><span>Alícuota Ingresos Brutos (IIBB)</span>
+          <div class="money-input"><input type="number" id="su-iibb" value="${(state.impuestos&&state.impuestos.iibb)??3}" step="0.1"><em>%</em></div>
+          <small>Compartida con Parámetros impositivos.</small></label>
+      </div>
+      <button class="btn-primary sm cfg-save-btn" id="cfg-save-supuestos">Guardar cambios</button>`;
   } else if (sec === "preferencias") {
     panel = `
       <div class="cfg-sec-head"><h3>Preferencias</h3></div>
@@ -6191,6 +6463,21 @@ function renderConfig() {
       i.iibb = parseFloat($("#cfg-iibb").value) || 0;
       i.debcred = parseFloat($("#cfg-debcred").value) || 0;
       i.ganancias = parseFloat($("#cfg-ganancias").value) || 0;
+      saveState(); flashSaved();
+    };
+    return;
+  }
+  if (sec === "supuestos") {
+    $("#cfg-save-supuestos").onclick = () => {
+      state.supuestos = state.supuestos || {};
+      const num = (id, def) => { const v = parseFloat($(id).value); return isNaN(v) ? def : v; };
+      state.supuestos.inflacionArs = num("#su-infars", 80);
+      state.supuestos.inflacionUsd = num("#su-infusd", 3);
+      state.supuestos.devaluacion = num("#su-devalua", 60);
+      state.supuestos.alicuotaGananciasSociedad = num("#su-gansoc", 35);
+      state.supuestos.alicuotaGananciasPersona = num("#su-ganper", 35);
+      state.impuestos = state.impuestos || {};
+      state.impuestos.iibb = num("#su-iibb", 3);
       saveState(); flashSaved();
     };
     return;
